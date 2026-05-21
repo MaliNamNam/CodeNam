@@ -56,8 +56,8 @@ workspace_down = "alt+j"
 workspace_up = "alt+k"
 workspace_right = "alt+l"
 
-# /resume picker behavior. Options: "current-terminal" or "new-terminal".
-# Ctrl+Enter performs the alternate action.
+# /resume picker Enter behavior. Options: "current-terminal" or "new-terminal".
+# By default Enter resumes in this terminal; Ctrl+Enter performs the alternate action.
 session_picker_enter = "current-terminal"
 
 [dictation]
