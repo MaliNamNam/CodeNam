@@ -566,6 +566,8 @@ fn single_session_typography_targets_jetbrains_mono_light_nerd() {
         SINGLE_SESSION_TITLE_FONT_SIZE,
         SINGLE_SESSION_DEFAULT_FONT_SIZE
     );
+    assert_eq!(SINGLE_SESSION_USER_FONT_FAMILY, "Kalam");
+    assert!(SINGLE_SESSION_HANDWRITING_FONT_FAMILIES.contains(&SINGLE_SESSION_USER_FONT_FAMILY));
     assert_eq!(
         SINGLE_SESSION_ASSISTANT_FONT_FAMILY,
         SINGLE_SESSION_FONT_FAMILY
@@ -985,7 +987,10 @@ fn single_session_slash_suggestions_support_tui_style_fuzzy_abbreviations() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("/cp".to_string()));
 
-    assert_eq!(app.active_inline_widget(), Some(InlineWidgetKind::SlashSuggestions));
+    assert_eq!(
+        app.active_inline_widget(),
+        Some(InlineWidgetKind::SlashSuggestions)
+    );
     let suggestions = app.inline_widget_styled_lines();
     assert!(suggestions.iter().any(|line| {
         line.style == SingleSessionLineStyle::OverlaySelection && line.text.contains("/copy")
@@ -999,7 +1004,10 @@ fn single_session_slash_suggestions_support_tui_style_fuzzy_abbreviations() {
 fn single_session_raw_slash_tab_completion_uses_fuzzy_after_suggestions_are_dismissed() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("/cp".to_string()));
-    assert_eq!(app.active_inline_widget(), Some(InlineWidgetKind::SlashSuggestions));
+    assert_eq!(
+        app.active_inline_widget(),
+        Some(InlineWidgetKind::SlashSuggestions)
+    );
 
     assert_eq!(app.handle_key(KeyInput::Escape), KeyOutcome::Redraw);
     assert_eq!(app.active_inline_widget(), None);
@@ -1012,7 +1020,10 @@ fn single_session_raw_slash_tab_completion_uses_fuzzy_after_suggestions_are_dism
 fn single_session_raw_slash_tab_completion_covers_commands_from_help_table() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("/ef".to_string()));
-    assert_eq!(app.active_inline_widget(), Some(InlineWidgetKind::SlashSuggestions));
+    assert_eq!(
+        app.active_inline_widget(),
+        Some(InlineWidgetKind::SlashSuggestions)
+    );
 
     assert_eq!(app.handle_key(KeyInput::Escape), KeyOutcome::Redraw);
     assert_eq!(app.active_inline_widget(), None);
@@ -2331,6 +2342,64 @@ fn desktop_maps_terminal_editing_shortcuts_from_tui() {
 }
 
 #[test]
+fn desktop_maps_standard_clipboard_shortcuts_across_platform_modifiers() {
+    assert_eq!(
+        to_key_input(&Key::Named(NamedKey::Paste), ModifiersState::empty()),
+        KeyInput::PasteText
+    );
+    assert_eq!(
+        to_key_input(&Key::Named(NamedKey::Cut), ModifiersState::empty()),
+        KeyInput::CutInputLine
+    );
+    assert_eq!(
+        to_key_input(&Key::Named(NamedKey::Copy), ModifiersState::empty()),
+        KeyInput::CopyLatestResponse
+    );
+    assert_eq!(
+        to_key_input(&Key::Named(NamedKey::Undo), ModifiersState::empty()),
+        KeyInput::UndoInput
+    );
+    assert_eq!(
+        to_key_input(&Key::Character("v".into()), ModifiersState::CONTROL),
+        KeyInput::PasteText
+    );
+    assert_eq!(
+        to_key_input(
+            &Key::Character("v".into()),
+            ModifiersState::CONTROL | ModifiersState::SHIFT
+        ),
+        KeyInput::PasteText
+    );
+    assert_eq!(
+        to_key_input(&Key::Character("v".into()), ModifiersState::SUPER),
+        KeyInput::PasteText
+    );
+    assert_eq!(
+        to_key_input(&Key::Character("x".into()), ModifiersState::SUPER),
+        KeyInput::CutInputLine
+    );
+    assert_eq!(
+        to_key_input(&Key::Character("z".into()), ModifiersState::SUPER),
+        KeyInput::UndoInput
+    );
+    assert_eq!(
+        to_key_input(&Key::Character("c".into()), ModifiersState::SUPER),
+        KeyInput::CopyLatestResponse
+    );
+    assert_eq!(
+        to_key_input(
+            &Key::Character("c".into()),
+            ModifiersState::SUPER | ModifiersState::SHIFT
+        ),
+        KeyInput::CopyLatestResponse
+    );
+    assert_eq!(
+        to_key_input(&Key::Character("c".into()), ModifiersState::CONTROL),
+        KeyInput::CancelGeneration
+    );
+}
+
+#[test]
 fn desktop_maps_remaining_global_shortcuts() {
     assert_eq!(
         to_key_input(&Key::Named(NamedKey::Tab), ModifiersState::CONTROL),
@@ -2724,7 +2793,7 @@ fn single_session_body_styled_lines_follow_roles_and_overlays() {
         segments.contains(&(
             "question",
             Attrs::new()
-                .family(Family::Name(SINGLE_SESSION_FONT_FAMILY))
+                .family(Family::Name(SINGLE_SESSION_USER_FONT_FAMILY))
                 .color(single_session_line_color(SingleSessionLineStyle::User))
         ))
     );
@@ -2788,6 +2857,7 @@ fn assistant_symbol_lines_use_main_font_to_avoid_missing_glyph_boxes() {
         text: symbol_line.to_string(),
         style: SingleSessionLineStyle::AssistantLink,
         inline_spans: Vec::new(),
+        tool: None,
     }];
     let symbol_segments = single_session_styled_text_segments(&symbol_lines);
     assert!(
@@ -2806,11 +2876,74 @@ fn assistant_symbol_lines_use_main_font_to_avoid_missing_glyph_boxes() {
         text: plain_line.to_string(),
         style: SingleSessionLineStyle::Assistant,
         inline_spans: Vec::new(),
+        tool: None,
     }];
     let plain_segments = single_session_styled_text_segments(&plain_lines);
     assert!(
         plain_segments.contains(&(
             plain_line,
+            Attrs::new()
+                .family(Family::Name(SINGLE_SESSION_ASSISTANT_FONT_FAMILY))
+                .color(single_session_line_color(SingleSessionLineStyle::Assistant))
+        ))
+    );
+
+    for (text, style, color_style) in [
+        (
+            "See https://example.com/docs for details",
+            SingleSessionLineStyle::Assistant,
+            SingleSessionLineStyle::Assistant,
+        ),
+        (
+            "docs https://example.com",
+            SingleSessionLineStyle::AssistantLink,
+            SingleSessionLineStyle::AssistantLink,
+        ),
+        (
+            "| command | result |",
+            SingleSessionLineStyle::AssistantTable,
+            SingleSessionLineStyle::AssistantTable,
+        ),
+        (
+            "Call single_session_render() carefully",
+            SingleSessionLineStyle::Assistant,
+            SingleSessionLineStyle::Assistant,
+        ),
+        (
+            "こんにちは assistant response",
+            SingleSessionLineStyle::Assistant,
+            SingleSessionLineStyle::Assistant,
+        ),
+    ] {
+        let lines = [SingleSessionStyledLine::new(text, style)];
+        let segments = single_session_styled_text_segments(&lines);
+        assert!(
+            segments.contains(&(
+                text,
+                Attrs::new()
+                    .family(Family::Name(SINGLE_SESSION_FONT_FAMILY))
+                    .color(single_session_line_color(color_style))
+            )),
+            "expected {text:?} to use the main monospace font"
+        );
+    }
+
+    let bullet_lines = [SingleSessionStyledLine::new(
+        "• handwritten list prose",
+        SingleSessionLineStyle::Assistant,
+    )];
+    let bullet_segments = single_session_styled_text_segments(&bullet_lines);
+    assert!(
+        bullet_segments.contains(&(
+            "• ",
+            Attrs::new()
+                .family(Family::Name(SINGLE_SESSION_FONT_FAMILY))
+                .color(text_color(MARKDOWN_LIST_MARKER_COLOR))
+        ))
+    );
+    assert!(
+        bullet_segments.contains(&(
+            "handwritten list prose",
             Attrs::new()
                 .family(Family::Name(SINGLE_SESSION_ASSISTANT_FONT_FAMILY))
                 .color(single_session_line_color(SingleSessionLineStyle::Assistant))
@@ -2889,9 +3022,23 @@ fn assistant_inline_code_uses_code_text_attrs_inside_prose() {
         segments.contains(&(
             "Use ",
             Attrs::new()
-                .family(Family::Name(SINGLE_SESSION_ASSISTANT_FONT_FAMILY))
+                .family(Family::Name(SINGLE_SESSION_FONT_FAMILY))
                 .color(single_session_line_color(SingleSessionLineStyle::Assistant))
         ))
+    );
+    assert!(
+        segments.contains(&(
+            " before ",
+            Attrs::new()
+                .family(Family::Name(SINGLE_SESSION_FONT_FAMILY))
+                .color(single_session_line_color(SingleSessionLineStyle::Assistant))
+        ))
+    );
+    assert!(
+        !segments
+            .iter()
+            .any(|(_, attrs)| attrs.family == Family::Name(SINGLE_SESSION_USER_FONT_FAMILY)),
+        "inline-code lines should avoid mixing handwriting and mono fonts: {segments:?}"
     );
     assert!(!segments.iter().any(|(text, _)| text.contains('`')));
     for code_segment in ["cargo test", "cargo clippy"] {
@@ -3307,16 +3454,19 @@ fn single_session_tool_text_segments_use_stateful_colors() {
             text: "  ✓ bash · done · tests passed".to_string(),
             style: SingleSessionLineStyle::Tool,
             inline_spans: Vec::new(),
+            tool: None,
         },
         SingleSessionStyledLine {
             text: "  │intent: Run tests                                            │".to_string(),
             style: SingleSessionLineStyle::Tool,
             inline_spans: Vec::new(),
+            tool: None,
         },
         SingleSessionStyledLine {
             text: "  plain tool output".to_string(),
             style: SingleSessionLineStyle::Tool,
             inline_spans: Vec::new(),
+            tool: None,
         },
     ];
 
@@ -3887,19 +4037,27 @@ fn first_glyph_color_for_text(buffer: &Buffer, text: &str) -> Option<TextColor> 
         .and_then(|run| run.glyphs.first().and_then(|glyph| glyph.color_opt))
 }
 
+fn buffer_has_layout_run_text(buffer: &Buffer, text: &str) -> bool {
+    buffer.layout_runs().any(|run| run.text == text)
+}
+
 #[test]
 fn single_session_tool_events_expand_context_and_collapse_previous_call() {
     let mut app = SingleSessionApp::new(None);
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        id: None,
         name: "bash".to_string(),
     });
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolInput {
+        id: None,
         delta: r#"{"command":"cargo test -p jcode-desktop","timeout":120000,"intent":"Run desktop tests"}"#.to_string(),
     });
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolExecuting {
+        id: None,
         name: "bash".to_string(),
     });
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolFinished {
+        id: None,
         name: "bash".to_string(),
         summary: "tests passed".to_string(),
         is_error: false,
@@ -3912,6 +4070,7 @@ fn single_session_tool_events_expand_context_and_collapse_previous_call() {
     assert_eq!(app.status.as_deref(), Some("tool bash done"));
 
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        id: None,
         name: "read".to_string(),
     });
     let body = app.body_lines().join("\n");
@@ -3925,15 +4084,18 @@ fn single_session_running_tool_input_is_visible_and_invalidates_render_cache() {
     let mut app = SingleSessionApp::new(None);
 
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        id: None,
         name: "bash".to_string(),
     });
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolExecuting {
+        id: None,
         name: "bash".to_string(),
     });
     let before_input_cache_key = app.rendered_body_cache_key((900, 700));
     let before_static_cache_key = app.rendered_body_static_cache_key((900, 700));
 
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolInput {
+        id: None,
         delta: r#"{"command":"sleep 10","intent":"wait while running"}"#.to_string(),
     });
 
@@ -3951,6 +4113,106 @@ fn single_session_running_tool_input_is_visible_and_invalidates_render_cache() {
 }
 
 #[test]
+fn single_session_tool_ids_drive_stable_native_card_runs() {
+    let mut app = SingleSessionApp::new(None);
+
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        id: Some("tool-a".to_string()),
+        name: "bash".to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolInput {
+        id: Some("tool-a".to_string()),
+        delta: r#"{"command":"echo a"}"#.to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolExecuting {
+        id: Some("tool-a".to_string()),
+        name: "bash".to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolFinished {
+        id: Some("tool-a".to_string()),
+        name: "bash".to_string(),
+        summary: "printed a".to_string(),
+        is_error: false,
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        id: Some("tool-b".to_string()),
+        name: "read".to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolInput {
+        id: Some("tool-b".to_string()),
+        delta: r#"{"file_path":"src/lib.rs"}"#.to_string(),
+    });
+
+    let lines = app.body_styled_lines();
+    let runs = single_session_tool_card_runs(&lines);
+
+    assert_eq!(
+        runs.len(),
+        2,
+        "each tool id should produce its own native card: {runs:?}"
+    );
+    assert_eq!(runs[0].call_id, "tool-a");
+    assert_eq!(runs[0].state, SingleSessionToolVisualState::Succeeded);
+    assert!(!runs[0].active);
+    assert_eq!(runs[1].call_id, "tool-b");
+    assert_eq!(runs[1].state, SingleSessionToolVisualState::Preparing);
+    assert!(runs[1].active);
+    assert!(
+        lines[runs[0].line]
+            .text
+            .contains("✓ bash · done · printed a"),
+        "finished tool should keep its compact success header: {:?}",
+        lines[runs[0].line]
+    );
+    assert!(
+        lines[runs[1].line].text.contains("○ read · preparing"),
+        "new active tool should keep its preparing header: {:?}",
+        lines[runs[1].line]
+    );
+}
+
+#[test]
+fn single_session_tool_cards_have_native_geometry_and_success_fill() {
+    let mut app = SingleSessionApp::new(None);
+    let size = PhysicalSize::new(900, 640);
+
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        id: Some("tool-card".to_string()),
+        name: "bash".to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolInput {
+        id: Some("tool-card".to_string()),
+        delta: r#"{"command":"cargo check -p jcode-desktop"}"#.to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolFinished {
+        id: Some("tool-card".to_string()),
+        name: "bash".to_string(),
+        summary: "check passed".to_string(),
+        is_error: false,
+    });
+
+    let lines = single_session_rendered_body_lines_for_tick(&app, size, 0);
+    let geometries = single_session_tool_card_geometries(&app, size, &lines);
+    let geometry = geometries
+        .iter()
+        .find(|geometry| geometry.run.call_id == "tool-card")
+        .unwrap_or_else(|| panic!("missing tool-card geometry: {geometries:?}"));
+
+    assert_eq!(geometry.run.name, "bash");
+    assert_eq!(geometry.run.state, SingleSessionToolVisualState::Succeeded);
+    assert_eq!(geometry.run.detail_line_count, 0);
+    assert!(geometry.card_rect.height > geometry.line_height * 0.45);
+    assert!(geometry.rail_rect.x > geometry.card_rect.x);
+    assert!(geometry.rail_rect.height <= geometry.card_rect.height);
+
+    let vertices = build_single_session_vertices(&app, size, 0.0, 0);
+    let bounds = pixel_bounds_for_color(&vertices, TOOL_CARD_SUCCESS_BACKGROUND_COLOR, size)
+        .expect("success tool card fill should be rendered as native geometry");
+    assert!(bounds.max_x > bounds.min_x);
+    assert!(bounds.max_y > bounds.min_y);
+}
+
+#[test]
 fn single_session_tool_event_preserves_prior_streaming_text_order() {
     let mut app = SingleSessionApp::new(None);
 
@@ -3958,9 +4220,11 @@ fn single_session_tool_event_preserves_prior_streaming_text_order() {
         "Before the tool".to_string(),
     ));
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        id: None,
         name: "bash".to_string(),
     });
     app.apply_session_event(session_launch::DesktopSessionEvent::ToolFinished {
+        id: None,
         name: "bash".to_string(),
         summary: "done".to_string(),
         is_error: false,
@@ -4005,6 +4269,12 @@ fn single_session_adjacent_tool_messages_render_as_compact_summary() {
         body[0],
         "  ▸ tools: 1 read, 2 agentgrep, 1 edit · ~23 tokens"
     );
+
+    let styled = app.body_styled_lines();
+    let runs = single_session_tool_card_runs(&styled);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].state, SingleSessionToolVisualState::Group);
+    assert_eq!(runs[0].kind, SingleSessionToolLineKind::GroupSummary);
 }
 
 #[test]
@@ -4313,6 +4583,65 @@ fn single_session_model_picker_filter_supports_fuzzy_abbreviations() {
     assert!(picker.contains("filter \"g5c\""));
     assert!(picker.contains("gpt-5-codex"), "{picker}");
     assert!(!picker.contains("claude-opus-4-5"), "{picker}");
+}
+
+#[test]
+fn single_session_model_picker_cold_start_benchmark() {
+    use std::time::Instant;
+
+    let mut app = SingleSessionApp::new(None);
+    let models = (0..5_000)
+        .map(|index| session_launch::DesktopModelChoice {
+            model: format!("provider-family-model-{index:04}"),
+            provider: Some(format!("provider-{}", index % 17)),
+            api_method: Some("responses".to_string()),
+            detail: Some(format!("benchmark detail tier {}", index % 11)),
+            available: true,
+        })
+        .collect::<Vec<_>>();
+
+    let open_started = Instant::now();
+    assert_eq!(
+        app.handle_key(KeyInput::OpenModelPicker),
+        KeyOutcome::LoadModelCatalog
+    );
+    let open_elapsed = open_started.elapsed();
+
+    let catalog_started = Instant::now();
+    app.apply_session_event(session_launch::DesktopSessionEvent::ModelCatalog {
+        current_model: Some("provider-family-model-2500".to_string()),
+        provider_name: Some("Benchmark".to_string()),
+        models,
+        reasoning_effort: None,
+        service_tier: None,
+        compaction_mode: None,
+    });
+    let catalog_elapsed = catalog_started.elapsed();
+
+    let first_render_started = Instant::now();
+    let lines = app.inline_widget_styled_lines();
+    let first_render_elapsed = first_render_started.elapsed();
+    assert!(lines.iter().any(|line| line.text.contains("5000 models")));
+
+    let filter_started = Instant::now();
+    assert_eq!(
+        app.handle_key(KeyInput::Character("2500".to_string())),
+        KeyOutcome::Redraw
+    );
+    let filter_elapsed = filter_started.elapsed();
+
+    let filtered_render_started = Instant::now();
+    let filtered_lines = app.inline_widget_styled_lines();
+    let filtered_render_elapsed = filtered_render_started.elapsed();
+    assert!(
+        filtered_lines
+            .iter()
+            .any(|line| line.text.contains("provider-family-model-2500"))
+    );
+
+    eprintln!(
+        "model_picker_cold_start_benchmark open={open_elapsed:?} catalog={catalog_elapsed:?} first_render={first_render_elapsed:?} filter={filter_elapsed:?} filtered_render={filtered_render_elapsed:?}"
+    );
 }
 
 #[test]
@@ -6034,6 +6363,35 @@ fn glyphon_caret_position_uses_shaped_draft_buffer() {
 }
 
 #[test]
+fn composer_draft_buffer_rebuilds_when_user_font_changes() {
+    let mut app = SingleSessionApp::new(None);
+    app.handle_key(KeyInput::Character("stale input".to_string()));
+    let size = PhysicalSize::new(640, 480);
+    let mut font_system = FontSystem::new();
+    let stale_key = single_session_text_key(&app, size);
+    let old_buffers = single_session_text_buffers_from_key(&stale_key, size, &mut font_system);
+
+    let mut previous_key = stale_key.clone();
+    previous_key.draft = "typed input".to_string();
+    previous_key.user_font_family = SINGLE_SESSION_USER_FONT_FAMILY;
+
+    let mut next_key = previous_key.clone();
+    next_key.user_font_family = "Patrick Hand";
+
+    let buffers = single_session_text_buffers_from_key_reusing_unchanged(
+        &next_key,
+        Some(&previous_key),
+        old_buffers,
+        false,
+        size,
+        &mut font_system,
+    );
+
+    assert!(buffer_has_layout_run_text(&buffers[2], "typed input"));
+    assert!(!buffer_has_layout_run_text(&buffers[2], "stale input"));
+}
+
+#[test]
 fn fresh_welcome_uses_dominant_hero_composer_while_drafting() {
     let size = PhysicalSize::new(1000, 720);
     let mut app = SingleSessionApp::new(None);
@@ -6167,7 +6525,7 @@ fn fresh_welcome_model_picker_only_reserves_inline_lane() {
     );
 
     let vertices = build_single_session_vertices(&app, size, 0.0, 0);
-    let inline_card_vertices = positions_for_color(&vertices, [0.972, 0.982, 1.000, 0.54]);
+    let inline_card_vertices = positions_for_color(&vertices, [0.992, 0.996, 1.000, 0.72]);
     assert!(
         !inline_card_vertices.is_empty(),
         "inline picker should draw a rounded card background"
@@ -6467,14 +6825,16 @@ fn single_session_wraps_one_session_card() {
 
 #[test]
 fn workspace_focused_session_promotes_to_single_session_app() {
-    let mut app = DesktopApp::Workspace(Workspace::from_session_cards(vec![workspace::SessionCard {
-        session_id: "session_alpha".to_string(),
-        title: "alpha".to_string(),
-        subtitle: "active".to_string(),
-        detail: "3 msgs".to_string(),
-        preview_lines: vec!["user hello".to_string()],
-        detail_lines: vec!["assistant hi".to_string()],
-    }]));
+    let mut app = DesktopApp::Workspace(Workspace::from_session_cards(vec![
+        workspace::SessionCard {
+            session_id: "session_alpha".to_string(),
+            title: "alpha".to_string(),
+            subtitle: "active".to_string(),
+            detail: "3 msgs".to_string(),
+            preview_lines: vec!["user hello".to_string()],
+            detail_lines: vec!["assistant hi".to_string()],
+        },
+    ]));
 
     assert!(app.promote_focused_workspace_session());
     let snapshot = app.debug_snapshot();

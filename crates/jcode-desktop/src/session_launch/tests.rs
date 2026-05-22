@@ -39,19 +39,63 @@ fn desktop_event_parser_maps_streaming_server_events() {
     assert_eq!(
         desktop_event_from_server_value(&json!({"type": "tool_start", "name": "bash"})),
         Some(DesktopSessionEvent::ToolStarted {
+            id: None,
+            name: "bash".to_string()
+        })
+    );
+    assert_eq!(
+        desktop_event_from_server_value(
+            &json!({"type": "tool_start", "id": " tool-1 ", "name": "bash"})
+        ),
+        Some(DesktopSessionEvent::ToolStarted {
+            id: Some("tool-1".to_string()),
             name: "bash".to_string()
         })
     );
     assert_eq!(
         desktop_event_from_server_value(&json!({"type": "tool_input", "delta": "{\"command\":"})),
         Some(DesktopSessionEvent::ToolInput {
+            id: None,
             delta: "{\"command\":".to_string()
+        })
+    );
+    assert_eq!(
+        desktop_event_from_server_value(
+            &json!({"type": "tool_input", "id": "tool-1", "delta": "cargo"})
+        ),
+        Some(DesktopSessionEvent::ToolInput {
+            id: Some("tool-1".to_string()),
+            delta: "cargo".to_string()
         })
     );
     assert_eq!(
         desktop_event_from_server_value(&json!({"type": "tool_exec", "name": "bash"})),
         Some(DesktopSessionEvent::ToolExecuting {
+            id: None,
             name: "bash".to_string()
+        })
+    );
+    assert_eq!(
+        desktop_event_from_server_value(
+            &json!({"type": "tool_exec", "id": "tool-1", "name": "bash"})
+        ),
+        Some(DesktopSessionEvent::ToolExecuting {
+            id: Some("tool-1".to_string()),
+            name: "bash".to_string()
+        })
+    );
+    assert_eq!(
+        desktop_event_from_server_value(&json!({
+            "type": "tool_done",
+            "id": "tool-1",
+            "name": "bash",
+            "output": "hello\nworld"
+        })),
+        Some(DesktopSessionEvent::ToolFinished {
+            id: Some("tool-1".to_string()),
+            name: "bash".to_string(),
+            summary: "hello".to_string(),
+            is_error: false
         })
     );
     assert_eq!(
@@ -61,6 +105,7 @@ fn desktop_event_parser_maps_streaming_server_events() {
             "output": "hello\nworld"
         })),
         Some(DesktopSessionEvent::ToolFinished {
+            id: None,
             name: "bash".to_string(),
             summary: "hello".to_string(),
             is_error: false

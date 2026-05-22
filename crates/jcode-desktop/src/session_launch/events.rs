@@ -42,11 +42,13 @@ pub(super) fn desktop_event_from_server_value(value: &Value) -> Option<DesktopSe
                 .get("name")
                 .and_then(Value::as_str)
                 .map(|name| DesktopSessionEvent::ToolStarted {
+                    id: optional_server_str(value, "id").map(ToOwned::to_owned),
                     name: name.to_string(),
                 })
         }
         "tool_exec" => value.get("name").and_then(Value::as_str).map(|name| {
             DesktopSessionEvent::ToolExecuting {
+                id: optional_server_str(value, "id").map(ToOwned::to_owned),
                 name: name.to_string(),
             }
         }),
@@ -55,11 +57,13 @@ pub(super) fn desktop_event_from_server_value(value: &Value) -> Option<DesktopSe
                 .get("delta")
                 .and_then(Value::as_str)
                 .map(|delta| DesktopSessionEvent::ToolInput {
+                    id: optional_server_str(value, "id").map(ToOwned::to_owned),
                     delta: delta.to_string(),
                 })
         }
         "tool_done" => value.get("name").and_then(Value::as_str).map(|name| {
             DesktopSessionEvent::ToolFinished {
+                id: optional_server_str(value, "id").map(ToOwned::to_owned),
                 name: name.to_string(),
                 summary: value
                     .get("output")
@@ -200,6 +204,14 @@ fn non_empty_server_str<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
         .get(field)
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
+}
+
+fn optional_server_str<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 pub(super) fn model_catalog_event_from_server_value(value: &Value) -> Option<DesktopSessionEvent> {

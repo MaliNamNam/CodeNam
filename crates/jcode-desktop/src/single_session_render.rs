@@ -4,7 +4,10 @@ use crate::desktop_rich_text::{
 };
 use crate::single_session::{
     MODEL_PICKER_INLINE_ROW_LIMIT, SingleSessionInlineSpan, SingleSessionInlineSpanKind,
-    SingleSessionTypography, single_session_trimmed_line_end_preserving_inline_code_whitespace,
+    SingleSessionToolLineKind, SingleSessionToolLineMetadata, SingleSessionToolVisualState,
+    SingleSessionTypography, single_session_assistant_font_family,
+    single_session_trimmed_line_end_preserving_inline_code_whitespace,
+    single_session_user_font_family,
 };
 
 mod handwriting;
@@ -33,6 +36,8 @@ pub(crate) struct SingleSessionTextKey {
     pub(crate) welcome_handoff_visible: bool,
     pub(crate) text_scale_bits: u32,
     pub(crate) body_top_offset_pixels_bits: u32,
+    pub(crate) user_font_family: &'static str,
+    pub(crate) assistant_font_family: &'static str,
     pub(crate) body: Vec<SingleSessionStyledLine>,
     pub(crate) inline_widget: Vec<SingleSessionStyledLine>,
     pub(crate) draft: String,
@@ -155,6 +160,7 @@ pub(crate) fn build_single_session_vertices_with_scroll_and_reveal(
         spinner_tick,
         smooth_scroll_lines,
     );
+    push_single_session_tool_cards(&mut vertices, app, size, spinner_tick, smooth_scroll_lines);
     push_single_session_inline_code_cards(
         &mut vertices,
         app,
@@ -264,6 +270,14 @@ pub(crate) fn build_single_session_vertices_with_cached_body(
         size,
         &viewport,
         rendered_body_lines.len(),
+    );
+    push_single_session_tool_cards_from_viewport(
+        &mut vertices,
+        app,
+        size,
+        &viewport,
+        rendered_body_lines.len(),
+        spinner_tick,
     );
     push_single_session_inline_code_cards_from_viewport(
         &mut vertices,
@@ -1366,6 +1380,28 @@ pub(crate) struct SingleSessionTranscriptCardGeometry {
     pub(crate) line_height: f32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SingleSessionToolCardRun {
+    pub(crate) line: usize,
+    pub(crate) line_count: usize,
+    pub(crate) call_id: String,
+    pub(crate) name: String,
+    pub(crate) state: SingleSessionToolVisualState,
+    pub(crate) active: bool,
+    pub(crate) expanded: bool,
+    pub(crate) detail_line_count: usize,
+    pub(crate) kind: SingleSessionToolLineKind,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct SingleSessionToolCardGeometry {
+    pub(crate) run: SingleSessionToolCardRun,
+    pub(crate) card_rect: Rect,
+    pub(crate) rail_rect: Rect,
+    pub(crate) line_height: f32,
+}
+
 fn push_single_session_transcript_cards(
     vertices: &mut Vec<Vertex>,
     app: &SingleSessionApp,
@@ -1410,6 +1446,268 @@ fn push_single_session_transcript_cards_from_viewport(
             continue;
         };
         push_rounded_rect(vertices, rect, 7.0, color, size);
+    }
+}
+
+fn push_single_session_tool_cards(
+    vertices: &mut Vec<Vertex>,
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+    tick: u64,
+    smooth_scroll_lines: f32,
+) {
+    let viewport = single_session_body_viewport_for_tick(app, size, tick, smooth_scroll_lines);
+    push_single_session_tool_cards_from_viewport(
+        vertices,
+        app,
+        size,
+        &viewport,
+        viewport.total_lines,
+        tick,
+    );
+}
+
+fn push_single_session_tool_cards_from_viewport(
+    vertices: &mut Vec<Vertex>,
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+    viewport: &SingleSessionBodyViewport,
+    total_lines: usize,
+    tick: u64,
+) {
+    let typography = single_session_typography_for_scale(app.text_scale());
+    let line_height = typography.body_size * typography.body_line_height;
+    let width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0 + 16.0).max(1.0);
+    let body_top = single_session_body_top_for_app(app, size);
+    let body_bottom = single_session_body_bottom_for_total_lines(app, size, total_lines);
+    let pulse = active_tool_card_pulse(tick);
+
+    for run in single_session_tool_card_runs(&viewport.lines) {
+        let rect = Rect {
+            x: PANEL_TITLE_LEFT_PADDING - 10.0,
+            y: body_top + viewport.top_offset_pixels + run.line as f32 * line_height + 2.0,
+            width,
+            height: (run.line_count as f32 * line_height - 4.0).max(1.0),
+        };
+        let Some(rect) = clip_rect_to_vertical_bounds(rect, body_top, body_bottom) else {
+            continue;
+        };
+        push_single_session_tool_card(vertices, &run, rect, line_height, pulse, size);
+    }
+}
+
+fn push_single_session_tool_card(
+    vertices: &mut Vec<Vertex>,
+    run: &SingleSessionToolCardRun,
+    rect: Rect,
+    line_height: f32,
+    pulse: f32,
+    size: PhysicalSize<u32>,
+) {
+    let radius = 9.0;
+    let mut background = single_session_tool_card_background(run.state, run.active);
+    if run.active {
+        background[3] = (background[3] + 0.08 * pulse).clamp(0.0, 0.82);
+    }
+    let border = if run.active {
+        let mut color = TOOL_CARD_ACTIVE_BORDER_COLOR;
+        color[3] = (color[3] + 0.16 * pulse).clamp(0.0, 0.58);
+        color
+    } else {
+        TOOL_CARD_BORDER_COLOR
+    };
+
+    let shadow = Rect {
+        x: rect.x + 1.5,
+        y: rect.y + 2.0,
+        width: rect.width,
+        height: rect.height,
+    };
+    push_rounded_rect(vertices, shadow, radius, [0.030, 0.050, 0.090, 0.035], size);
+    push_rounded_rect(vertices, rect, radius, border, size);
+    let inner = Rect {
+        x: rect.x + 1.0,
+        y: rect.y + 1.0,
+        width: (rect.width - 2.0).max(1.0),
+        height: (rect.height - 2.0).max(1.0),
+    };
+    push_rounded_rect(vertices, inner, radius - 1.0, background, size);
+
+    let rail_color = if run.active {
+        let mut color = TOOL_TIMELINE_ACTIVE_RAIL_COLOR;
+        color[3] = (color[3] + 0.24 * pulse).clamp(0.0, 0.74);
+        color
+    } else {
+        single_session_tool_state_accent(run.state)
+    };
+    let rail_rect = tool_card_rail_rect(rect);
+    push_rounded_rect(vertices, rail_rect, rail_rect.width / 2.0, rail_color, size);
+
+    let dot_size = 9.0;
+    push_rounded_rect(
+        vertices,
+        Rect {
+            x: rail_rect.x + (rail_rect.width - dot_size) * 0.5,
+            y: rect.y + line_height * 0.44 - dot_size * 0.5,
+            width: dot_size,
+            height: dot_size,
+        },
+        dot_size / 2.0,
+        rail_color,
+        size,
+    );
+
+    let chip_width = (run.state.label().chars().count() as f32 * 8.0 + 24.0).clamp(52.0, 96.0);
+    let chip_rect = Rect {
+        x: rect.x + rect.width - chip_width - 10.0,
+        y: rect.y + 7.0,
+        width: chip_width,
+        height: (line_height * 0.52).clamp(17.0, 25.0),
+    };
+    push_rounded_rect(
+        vertices,
+        chip_rect,
+        chip_rect.height / 2.0,
+        TOOL_STATUS_CHIP_COLOR,
+        size,
+    );
+
+    if run.detail_line_count > 0 {
+        let drawer = Rect {
+            x: rect.x + 26.0,
+            y: rect.y + line_height + 1.0,
+            width: (rect.width - 38.0).max(1.0),
+            height: (rect.height - line_height - 7.0).max(1.0),
+        };
+        push_rounded_rect(vertices, drawer, 7.0, TOOL_OUTPUT_DRAWER_COLOR, size);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn single_session_tool_card_geometries(
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+    rendered_body_lines: &[SingleSessionStyledLine],
+) -> Vec<SingleSessionToolCardGeometry> {
+    let typography = single_session_typography_for_scale(app.text_scale());
+    let line_height = typography.body_size * typography.body_line_height;
+    let width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0 + 16.0).max(1.0);
+    let body_top = single_session_body_top_for_app(app, size);
+
+    single_session_tool_card_runs(rendered_body_lines)
+        .into_iter()
+        .map(|run| {
+            let card_rect = Rect {
+                x: PANEL_TITLE_LEFT_PADDING - 10.0,
+                y: body_top + run.line as f32 * line_height + 2.0,
+                width,
+                height: (run.line_count as f32 * line_height - 4.0).max(1.0),
+            };
+            SingleSessionToolCardGeometry {
+                run,
+                rail_rect: tool_card_rail_rect(card_rect),
+                card_rect,
+                line_height,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn single_session_tool_card_runs(
+    lines: &[SingleSessionStyledLine],
+) -> Vec<SingleSessionToolCardRun> {
+    let mut runs = Vec::new();
+    let mut current: Option<SingleSessionToolCardRun> = None;
+
+    for (line, styled_line) in lines.iter().enumerate() {
+        let Some(metadata) = styled_line.tool.as_ref() else {
+            if let Some(run) = current.take() {
+                runs.push(run);
+            }
+            continue;
+        };
+
+        match &mut current {
+            Some(run) if run.call_id == metadata.call_id && run.line + run.line_count == line => {
+                run.line_count += 1;
+                run.active |= metadata.active;
+                run.expanded |= metadata.expanded;
+                if metadata.kind == SingleSessionToolLineKind::Detail {
+                    run.detail_line_count += 1;
+                }
+                if metadata.state.is_active() || !run.state.is_active() {
+                    run.state = metadata.state;
+                }
+            }
+            Some(run) => {
+                runs.push(run.clone());
+                current = Some(tool_card_run_from_metadata(line, metadata));
+            }
+            None => current = Some(tool_card_run_from_metadata(line, metadata)),
+        }
+    }
+
+    if let Some(run) = current {
+        runs.push(run);
+    }
+
+    runs
+}
+
+fn tool_card_run_from_metadata(
+    line: usize,
+    metadata: &SingleSessionToolLineMetadata,
+) -> SingleSessionToolCardRun {
+    SingleSessionToolCardRun {
+        line,
+        line_count: 1,
+        call_id: metadata.call_id.clone(),
+        name: metadata.name.clone(),
+        state: metadata.state,
+        active: metadata.active,
+        expanded: metadata.expanded,
+        detail_line_count: usize::from(metadata.kind == SingleSessionToolLineKind::Detail),
+        kind: metadata.kind,
+    }
+}
+
+fn tool_card_rail_rect(card_rect: Rect) -> Rect {
+    Rect {
+        x: card_rect.x + 9.0,
+        y: card_rect.y + 7.0,
+        width: 3.0,
+        height: (card_rect.height - 14.0).max(6.0),
+    }
+}
+
+fn active_tool_card_pulse(tick: u64) -> f32 {
+    let phase = (tick % 36) as f32 / 36.0;
+    0.5 + 0.5 * (phase * std::f32::consts::TAU).sin()
+}
+
+fn single_session_tool_card_background(
+    state: SingleSessionToolVisualState,
+    active: bool,
+) -> [f32; 4] {
+    if active || state.is_active() {
+        return TOOL_CARD_ACTIVE_BACKGROUND_COLOR;
+    }
+    match state {
+        SingleSessionToolVisualState::Succeeded => TOOL_CARD_SUCCESS_BACKGROUND_COLOR,
+        SingleSessionToolVisualState::Failed => TOOL_CARD_FAILED_BACKGROUND_COLOR,
+        SingleSessionToolVisualState::Group => TOOL_CARD_GROUP_BACKGROUND_COLOR,
+        _ => TOOL_CARD_BACKGROUND_COLOR,
+    }
+}
+
+fn single_session_tool_state_accent(state: SingleSessionToolVisualState) -> [f32; 4] {
+    match state {
+        SingleSessionToolVisualState::Succeeded => TOOL_SUCCESS_TEXT_COLOR,
+        SingleSessionToolVisualState::Failed => TOOL_FAILED_TEXT_COLOR,
+        SingleSessionToolVisualState::Running => TOOL_RUNNING_TEXT_COLOR,
+        SingleSessionToolVisualState::Preparing => TOOL_PENDING_TEXT_COLOR,
+        SingleSessionToolVisualState::Group => TOOL_TEXT_COLOR,
+        SingleSessionToolVisualState::Unknown => TOOL_TIMELINE_RAIL_COLOR,
     }
 }
 
@@ -2431,6 +2729,8 @@ fn single_session_text_key_for_body_lines(
         welcome_handoff_visible,
         text_scale_bits: app.text_scale().to_bits(),
         body_top_offset_pixels_bits: body_top_offset_pixels.to_bits(),
+        user_font_family: single_session_user_font_family(),
+        assistant_font_family: single_session_assistant_font_family(),
         body,
         inline_widget: app.inline_widget_styled_lines(),
         draft: if welcome_input_visible {
@@ -2499,13 +2799,20 @@ fn single_session_text_buffers_from_key_reusing_unchanged_from_options(
         typography.meta_size
     };
 
+    let user_font_compatible = previous_key.is_some_and(|previous| {
+        previous.user_font_family == key.user_font_family
+            && previous.assistant_font_family == key.assistant_font_family
+    });
     let exact_layout_compatible = previous_key.is_some_and(|previous| {
-        previous.size == key.size && previous.text_scale_bits == key.text_scale_bits
+        previous.size == key.size
+            && previous.text_scale_bits == key.text_scale_bits
+            && user_font_compatible
     });
     let body_layout_compatible = previous_key.is_some_and(|previous| {
         previous.text_scale_bits == key.text_scale_bits
             && single_session_body_text_buffer_layout_bucket(previous.size, text_scale)
                 == single_session_body_text_buffer_layout_bucket(key.size, text_scale)
+            && user_font_compatible
     });
     let take_reusable =
         |old_buffers: &mut Vec<Option<Buffer>>, index: usize, reusable: bool| -> Option<Buffer> {
@@ -2536,7 +2843,8 @@ fn single_session_text_buffers_from_key_reusing_unchanged_from_options(
     let body_buffer = take_reusable(
         &mut old_buffers,
         1,
-        reuse_body_buffer || body_previous.is_some_and(|previous| previous.body == key.body),
+        (reuse_body_buffer && user_font_compatible)
+            || body_previous.is_some_and(|previous| previous.body == key.body),
     )
     .unwrap_or_else(|| {
         single_session_body_text_buffer_from_lines(font_system, &key.body, size, text_scale)
@@ -2572,9 +2880,10 @@ fn single_session_text_buffers_from_key_reusing_unchanged_from_options(
         exact_previous.is_some_and(|previous| previous.draft == key.draft),
     )
     .unwrap_or_else(|| {
-        single_session_text_buffer(
+        single_session_text_buffer_with_family(
             font_system,
             &key.draft,
+            key.user_font_family,
             typography.code_size,
             typography.code_size * typography.code_line_height,
             content_width,
@@ -3013,6 +3322,7 @@ fn push_wrapped_body_line_owned(
         &line.text,
         &line.inline_spans,
         line.style,
+        line.tool.as_ref(),
         max_columns,
     );
 }
@@ -3031,6 +3341,7 @@ fn push_wrapped_body_line_ref(
         &line.text,
         &line.inline_spans,
         line.style,
+        line.tool.as_ref(),
         max_columns,
     );
 }
@@ -3040,14 +3351,13 @@ fn push_wrapped_body_line_parts(
     text: &str,
     inline_spans: &[SingleSessionInlineSpan],
     style: SingleSessionLineStyle,
+    tool: Option<&SingleSessionToolLineMetadata>,
     max_columns: usize,
 ) {
     for (text, inline_spans) in wrap_body_line_text_with_spans(text, inline_spans, max_columns) {
-        wrapped.push(SingleSessionStyledLine::with_inline_spans(
-            text,
-            style,
-            inline_spans,
-        ));
+        let mut line = SingleSessionStyledLine::with_inline_spans(text, style, inline_spans);
+        line.tool = tool.cloned();
+        wrapped.push(line);
     }
 }
 
@@ -3546,6 +3856,13 @@ fn push_assistant_markdown_inline_range<'a>(
         return true;
     }
 
+    let force_main_font = inline_spans.iter().any(|span| {
+        matches!(
+            span.kind,
+            SingleSessionInlineSpanKind::Code | SingleSessionInlineSpanKind::Math
+        )
+    });
+
     let mut boundaries = Vec::with_capacity(inline_spans.len().saturating_mul(2) + 2);
     boundaries.push(start);
     boundaries.push(end);
@@ -3567,7 +3884,7 @@ fn push_assistant_markdown_inline_range<'a>(
             active_inline_span_kinds_for_range(&inline_spans, segment_start, segment_end);
         segments.push((
             text,
-            assistant_inline_markdown_run_attrs(line.style, text, &active_kinds),
+            assistant_inline_markdown_run_attrs(line.style, text, &active_kinds, force_main_font),
         ));
     }
     true
@@ -3607,6 +3924,7 @@ fn assistant_inline_markdown_run_attrs(
     style: SingleSessionLineStyle,
     text: &str,
     kinds: &[SingleSessionInlineSpanKind],
+    force_main_font: bool,
 ) -> Attrs<'static> {
     if kinds.iter().any(|kind| {
         matches!(
@@ -3617,7 +3935,11 @@ fn assistant_inline_markdown_run_attrs(
         return single_session_style_attrs(SingleSessionLineStyle::Code);
     }
 
-    let mut attrs = single_session_style_attrs_for_text(style, text);
+    let mut attrs = if force_main_font {
+        single_session_style_attrs_for_family(style, SINGLE_SESSION_FONT_FAMILY)
+    } else {
+        single_session_style_attrs_for_text(style, text)
+    };
     if kinds.contains(&SingleSessionInlineSpanKind::Strike) {
         attrs = attrs.color(text_color(MARKDOWN_STRIKE_TEXT_COLOR));
     }
@@ -3850,11 +4172,7 @@ fn single_session_inline_color_attrs_for_text(
     text: &str,
     color: [f32; 4],
 ) -> Attrs<'static> {
-    let family = if is_ai_response_font_style(style) && text_contains_symbol_glyphs(text) {
-        SINGLE_SESSION_FONT_FAMILY
-    } else {
-        single_session_font_family_for_style(style)
-    };
+    let family = single_session_font_family_for_text(style, text);
     Attrs::new()
         .family(Family::Name(family))
         .color(text_color(color))
@@ -4067,17 +4385,33 @@ fn single_session_style_attrs_for_text(
     style: SingleSessionLineStyle,
     text: &str,
 ) -> Attrs<'static> {
-    let family = if is_ai_response_font_style(style) && text_contains_symbol_glyphs(text) {
-        SINGLE_SESSION_FONT_FAMILY
-    } else {
-        single_session_font_family_for_style(style)
-    };
+    let family = single_session_font_family_for_text(style, text);
     single_session_style_attrs_for_family(style, family)
 }
 
+fn single_session_font_family_for_text(style: SingleSessionLineStyle, text: &str) -> &'static str {
+    if matches!(
+        style,
+        SingleSessionLineStyle::User | SingleSessionLineStyle::UserContinuation
+    ) {
+        return single_session_user_font_family();
+    }
+
+    if assistant_text_should_use_handwriting_font(style, text) {
+        return single_session_assistant_font_family();
+    }
+
+    SINGLE_SESSION_FONT_FAMILY
+}
+
 fn single_session_font_family_for_style(style: SingleSessionLineStyle) -> &'static str {
-    if is_ai_response_font_style(style) {
-        SINGLE_SESSION_ASSISTANT_FONT_FAMILY
+    if matches!(
+        style,
+        SingleSessionLineStyle::User | SingleSessionLineStyle::UserContinuation
+    ) {
+        single_session_user_font_family()
+    } else if assistant_style_can_use_handwriting_font(style) {
+        single_session_assistant_font_family()
     } else {
         SINGLE_SESSION_FONT_FAMILY
     }
@@ -4096,14 +4430,72 @@ fn text_contains_symbol_glyphs(text: &str) -> bool {
     !text.is_ascii()
 }
 
-fn is_ai_response_font_style(style: SingleSessionLineStyle) -> bool {
+fn assistant_style_can_use_handwriting_font(style: SingleSessionLineStyle) -> bool {
     matches!(
         style,
         SingleSessionLineStyle::Assistant
             | SingleSessionLineStyle::AssistantHeading
             | SingleSessionLineStyle::AssistantQuote
-            | SingleSessionLineStyle::AssistantLink
     )
+}
+
+fn assistant_text_should_use_handwriting_font(style: SingleSessionLineStyle, text: &str) -> bool {
+    assistant_style_can_use_handwriting_font(style)
+        && !text.trim().is_empty()
+        && !text_contains_symbol_glyphs(text)
+        && !text_contains_urlish_token(text)
+        && !text_contains_codeish_token(text)
+        && !text_has_dense_punctuation(text)
+}
+
+fn text_contains_urlish_token(text: &str) -> bool {
+    text.split_whitespace().any(|token| {
+        let token = token.trim_matches(|ch: char| matches!(ch, ',' | '.' | ')' | ']' | '}'));
+        token.starts_with("http://")
+            || token.starts_with("https://")
+            || token.starts_with("www.")
+            || token.contains("://")
+            || token.contains('@')
+            || (token.contains('.')
+                && token.rsplit_once('.').is_some_and(|(_, suffix)| {
+                    suffix.len() >= 2 && suffix.chars().all(|ch| ch.is_ascii_alphabetic())
+                }))
+    })
+}
+
+fn text_contains_codeish_token(text: &str) -> bool {
+    const CODE_MARKERS: &[&str] = &[
+        "`", "```", "::", "->", "=>", "==", "!=", "<=", ">=", "&&", "||", "</", "/>",
+    ];
+    if CODE_MARKERS.iter().any(|marker| text.contains(marker)) {
+        return true;
+    }
+    text.split_whitespace().any(|token| {
+        token
+            .chars()
+            .any(|ch| matches!(ch, '{' | '}' | '[' | ']' | ';' | '$' | '\\'))
+            || (token.contains('/') && token.chars().any(|ch| ch.is_ascii_alphabetic()))
+            || token
+                .split('_')
+                .skip(1)
+                .next()
+                .is_some_and(|_| token.chars().any(|ch| ch.is_ascii_alphabetic()))
+    })
+}
+
+fn text_has_dense_punctuation(text: &str) -> bool {
+    let mut punctuation = 0_usize;
+    let mut non_space = 0_usize;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        non_space += 1;
+        if ch.is_ascii_punctuation() && !matches!(ch, '.' | ',' | '!' | '?' | ':' | '-') {
+            punctuation += 1;
+        }
+    }
+    non_space > 0 && punctuation * 4 > non_space
 }
 
 fn single_session_color_attrs(color: TextColor) -> Attrs<'static> {
