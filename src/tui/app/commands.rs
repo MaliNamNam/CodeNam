@@ -282,6 +282,7 @@ pub(super) fn activate_auto_poke_local(app: &mut App) {
             app.streaming_output_tokens = 0;
             app.streaming_cache_read_tokens = None;
             app.streaming_cache_creation_tokens = None;
+            app.current_api_usage_recorded = false;
             app.upstream_provider = None;
             app.status_detail = None;
             app.streaming_tps_start = None;
@@ -2171,6 +2172,14 @@ pub(super) fn handle_test_command(app: &mut App, trimmed: &str) -> bool {
         app.set_status_notice("Running /test");
     }
     true
+}
+
+fn slash_command_rest<'a>(trimmed: &'a str, command: &str) -> Option<&'a str> {
+    if trimmed == command {
+        Some("")
+    } else {
+        trimmed.strip_prefix(&format!("{} ", command))
+    }
 }
 
 fn test_usage() -> String {

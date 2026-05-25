@@ -838,6 +838,10 @@ impl Agent {
         &self.last_usage
     }
 
+    pub fn token_usage_totals(&self) -> crate::protocol::TokenUsageTotals {
+        self.session.token_usage_totals()
+    }
+
     /// Export the full conversation as a markdown transcript.
     pub fn export_conversation_markdown(&self) -> String {
         let mut md = String::new();
