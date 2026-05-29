@@ -77,7 +77,7 @@ fn cold_cache_warning_is_persisted_when_starting_next_request() {
     app.display_messages.push(DisplayMessage::user("first"));
     app.kv_cache_baseline = Some(KvCacheBaseline {
         input_tokens: 911_873,
-        completed_at: Instant::now() - Duration::from_secs(3601),
+        completed_at: Instant::now() - Duration::from_secs(3723),
         provider: "anthropic".to_string(),
         model: "claude-opus-4-6".to_string(),
         upstream_provider: None,
@@ -95,7 +95,16 @@ fn cold_cache_warning_is_persisted_when_starting_next_request() {
         })
         .expect("cold cache warning should be persisted in the transcript");
     assert!(warning.content.contains("911K"));
-    assert!(warning.content.contains("3600s TTL expired"));
+    assert!(
+        warning.content.contains("3600s TTL expired 123s ago")
+            || warning.content.contains("3600s TTL expired 124s ago"),
+        "{warning:?}"
+    );
+    assert!(
+        warning.content.contains("last cache write was 3723s ago")
+            || warning.content.contains("last cache write was 3724s ago"),
+        "{warning:?}"
+    );
 }
 
 #[test]

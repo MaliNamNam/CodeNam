@@ -1190,6 +1190,7 @@ impl App {
             return;
         }
 
+        let expired_ago_secs = age_secs.saturating_sub(ttl_secs);
         let tokens = baseline.input_tokens;
         let token_label = if tokens >= 1_000_000 {
             format!("{:.1}M", tokens as f64 / 1_000_000.0)
@@ -1199,8 +1200,8 @@ impl App {
             tokens.to_string()
         };
         self.push_display_message(DisplayMessage::system(format!(
-            "🧊 Prompt cache is cold: ~{} input tokens may be resent on this request ({}s TTL expired after {}s). Use /cache to extend the timer before long breaks, or start a fresh/compacted session for very large histories.",
-            token_label, ttl_secs, age_secs
+            "🧊 Prompt cache is cold: ~{} input tokens may be resent on this request ({}s TTL expired {}s ago; last cache write was {}s ago). Use /cache to extend the timer before long breaks, or start a fresh/compacted session for very large histories.",
+            token_label, ttl_secs, expired_ago_secs, age_secs
         )));
     }
 
