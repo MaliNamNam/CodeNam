@@ -302,7 +302,10 @@ fn read_choice() -> String {
 /// This mutates `state`'s nudge flags but does not persist; the caller is
 /// responsible for saving.
 #[cfg(any(test, target_os = "macos"))]
-fn macos_terminal_notice(state: &mut SetupHintsState, terminal: MacTerminalKind) -> Option<StartupHints> {
+fn macos_terminal_notice(
+    state: &mut SetupHintsState,
+    terminal: MacTerminalKind,
+) -> Option<StartupHints> {
     state.mac_ghostty_guided = true;
     state.mac_ghostty_dismissed = true;
 
