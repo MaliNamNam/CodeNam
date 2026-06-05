@@ -128,9 +128,9 @@ impl App {
         // Pricing in $/1M tokens. Anthropic resolves real per-model pricing in
         // refresh_cached_pricing; other providers fall back to the generic
         // defaults cached here.
-        let prompt_price = *self.cached_prompt_price.get_or_insert(15.0);
-        let completion_price = *self.cached_completion_price.get_or_insert(60.0);
-        let cache_read_price = self.cached_cache_read_price;
+        let prompt_price = *self.cost.cached_prompt_price.get_or_insert(15.0);
+        let completion_price = *self.cost.cached_completion_price.get_or_insert(60.0);
+        let cache_read_price = self.cost.cached_cache_read_price;
 
         // Cache-read tokens are billed at the (cheaper) cache-read rate when we
         // know it; otherwise treat them as regular input tokens.
@@ -146,7 +146,7 @@ impl App {
             Some(price) => (cache_read_tokens as f32 * price) / 1_000_000.0,
             None => (cache_read_tokens as f32 * prompt_price) / 1_000_000.0,
         };
-        self.total_cost += prompt_cost + completion_cost + cache_read_cost;
+        self.cost.total_cost += prompt_cost + completion_cost + cache_read_cost;
     }
 
     /// Resolve and cache per-model pricing for the active provider. For
@@ -155,24 +155,24 @@ impl App {
     /// Re-resolves when the active model changes.
     fn refresh_cached_pricing(&mut self, is_anthropic: bool) {
         let model = self.provider.model().to_string();
-        if self.cached_price_model.as_deref() == Some(model.as_str()) {
+        if self.cost.cached_price_model.as_deref() == Some(model.as_str()) {
             return;
         }
 
         if is_anthropic {
             if let Some(estimate) = jcode_provider_core::pricing::anthropic_api_pricing(&model) {
                 let per_mtok = |micros: Option<u64>| micros.map(|m| m as f32 / 1_000_000.0);
-                self.cached_prompt_price = per_mtok(estimate.input_price_per_mtok_micros);
-                self.cached_completion_price = per_mtok(estimate.output_price_per_mtok_micros);
-                self.cached_cache_read_price = per_mtok(estimate.cache_read_price_per_mtok_micros);
-                self.cached_price_model = Some(model);
+                self.cost.cached_prompt_price = per_mtok(estimate.input_price_per_mtok_micros);
+                self.cost.cached_completion_price = per_mtok(estimate.output_price_per_mtok_micros);
+                self.cost.cached_cache_read_price = per_mtok(estimate.cache_read_price_per_mtok_micros);
+                self.cost.cached_price_model = Some(model);
                 return;
             }
         }
 
         // Unknown model: leave existing defaults in place but remember the model
         // so we do not repeatedly attempt resolution for it.
-        self.cached_price_model = Some(model);
+        self.cost.cached_price_model = Some(model);
     }
 
     pub(super) fn compute_streaming_tps(&self) -> Option<f32> {
