@@ -186,7 +186,7 @@ fn test_handle_server_event_tool_start_flushes_streaming_text_before_tool_messag
 
     app.is_processing = true;
     app.status = ProcessingStatus::Streaming;
-    app.streaming_text = "Let me inspect those files first.".to_string();
+    app.streaming.streaming_text = "Let me inspect those files first.".to_string();
 
     app.handle_server_event(
         crate::protocol::ServerEvent::ToolStart {
@@ -196,7 +196,7 @@ fn test_handle_server_event_tool_start_flushes_streaming_text_before_tool_messag
         &mut remote,
     );
 
-    assert!(app.streaming_text.is_empty());
+    assert!(app.streaming.streaming_text.is_empty());
     assert_eq!(app.display_messages().len(), 1);
     assert_eq!(app.display_messages()[0].role, "assistant");
     assert_eq!(
@@ -807,7 +807,7 @@ fn test_handle_remote_disconnect_flushes_streaming_text_and_sets_reconnect_state
         retry_attempts: 0,
         retry_at: None,
     });
-    app.streaming_text = "partial response being streamed".to_string();
+    app.streaming.streaming_text = "partial response being streamed".to_string();
 
     let mut state = remote::RemoteRunState::default();
     remote::handle_disconnect(&mut app, &mut state, None);
@@ -816,7 +816,7 @@ fn test_handle_remote_disconnect_flushes_streaming_text_and_sets_reconnect_state
     assert!(matches!(app.status, ProcessingStatus::Idle));
     assert!(app.current_message_id.is_none());
     assert!(app.rate_limit_pending_message.is_none());
-    assert!(app.streaming_text.is_empty());
+    assert!(app.streaming.streaming_text.is_empty());
     assert_eq!(state.disconnect_msg_idx, Some(1));
     assert_eq!(state.reconnect_attempts, 1);
     assert!(state.disconnect_start.is_some());

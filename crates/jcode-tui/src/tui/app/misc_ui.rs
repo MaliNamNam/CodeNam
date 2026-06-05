@@ -3,39 +3,39 @@ use super::*;
 /// Update cost calculation based on token usage (for API-key providers)
 impl App {
     pub(super) fn current_streaming_tps_elapsed(&self) -> Duration {
-        let mut elapsed = self.streaming_tps_elapsed;
-        if let Some(start) = self.streaming_tps_start {
+        let mut elapsed = self.streaming.streaming_tps_elapsed;
+        if let Some(start) = self.streaming.streaming_tps_start {
             elapsed += start.elapsed();
         }
         elapsed
     }
 
     pub(super) fn snapshot_streaming_tps(&mut self) {
-        self.streaming_tps_observed_output_tokens = self.streaming_total_output_tokens;
-        self.streaming_tps_observed_elapsed = self.current_streaming_tps_elapsed();
+        self.streaming.streaming_tps_observed_output_tokens = self.streaming.streaming_total_output_tokens;
+        self.streaming.streaming_tps_observed_elapsed = self.current_streaming_tps_elapsed();
     }
 
     pub(super) fn resume_streaming_tps(&mut self) {
-        self.streaming_tps_collect_output = true;
-        if self.streaming_tps_start.is_none() {
-            self.streaming_tps_start = Some(Instant::now());
+        self.streaming.streaming_tps_collect_output = true;
+        if self.streaming.streaming_tps_start.is_none() {
+            self.streaming.streaming_tps_start = Some(Instant::now());
         }
     }
 
     pub(super) fn pause_streaming_tps(&mut self, keep_collecting_output: bool) {
-        if let Some(start) = self.streaming_tps_start.take() {
-            self.streaming_tps_elapsed += start.elapsed();
+        if let Some(start) = self.streaming.streaming_tps_start.take() {
+            self.streaming.streaming_tps_elapsed += start.elapsed();
         }
-        self.streaming_tps_collect_output = keep_collecting_output;
+        self.streaming.streaming_tps_collect_output = keep_collecting_output;
     }
 
     pub(super) fn reset_streaming_tps(&mut self) {
-        self.streaming_tps_start = None;
-        self.streaming_tps_elapsed = Duration::ZERO;
-        self.streaming_tps_collect_output = false;
-        self.streaming_total_output_tokens = 0;
-        self.streaming_tps_observed_output_tokens = 0;
-        self.streaming_tps_observed_elapsed = Duration::ZERO;
+        self.streaming.streaming_tps_start = None;
+        self.streaming.streaming_tps_elapsed = Duration::ZERO;
+        self.streaming.streaming_tps_collect_output = false;
+        self.streaming.streaming_total_output_tokens = 0;
+        self.streaming.streaming_tps_observed_output_tokens = 0;
+        self.streaming.streaming_tps_observed_elapsed = Duration::ZERO;
     }
 
     pub(super) fn open_usage_inline_loading(&mut self) {
@@ -134,14 +134,14 @@ impl App {
 
         // Cache-read tokens are billed at the (cheaper) cache-read rate when we
         // know it; otherwise treat them as regular input tokens.
-        let cache_read_tokens = self.streaming_cache_read_tokens.unwrap_or(0);
+        let cache_read_tokens = self.streaming.streaming_cache_read_tokens.unwrap_or(0);
         let full_input_tokens = self
-            .streaming_input_tokens
-            .saturating_sub(cache_read_tokens.min(self.streaming_input_tokens));
+            .streaming.streaming_input_tokens
+            .saturating_sub(cache_read_tokens.min(self.streaming.streaming_input_tokens));
 
         let prompt_cost = (full_input_tokens as f32 * prompt_price) / 1_000_000.0;
         let completion_cost =
-            (self.streaming_output_tokens as f32 * completion_price) / 1_000_000.0;
+            (self.streaming.streaming_output_tokens as f32 * completion_price) / 1_000_000.0;
         let cache_read_cost = match cache_read_price {
             Some(price) => (cache_read_tokens as f32 * price) / 1_000_000.0,
             None => (cache_read_tokens as f32 * prompt_price) / 1_000_000.0,
@@ -176,8 +176,8 @@ impl App {
     }
 
     pub(super) fn compute_streaming_tps(&self) -> Option<f32> {
-        let elapsed_secs = self.streaming_tps_observed_elapsed.as_secs_f32();
-        let total_tokens = self.streaming_tps_observed_output_tokens;
+        let elapsed_secs = self.streaming.streaming_tps_observed_elapsed.as_secs_f32();
+        let total_tokens = self.streaming.streaming_tps_observed_output_tokens;
         if elapsed_secs > 0.1 && total_tokens > 0 {
             Some(total_tokens as f32 / elapsed_secs)
         } else {

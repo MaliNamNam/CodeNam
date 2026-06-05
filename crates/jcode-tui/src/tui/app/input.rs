@@ -2374,10 +2374,10 @@ impl App {
             prefix.push('\n');
         }
         prefix.push('\n');
-        if self.streaming_text.is_empty() {
+        if self.streaming.streaming_text.is_empty() {
             self.replace_streaming_text(prefix);
         } else {
-            self.replace_streaming_text(format!("{}{}", prefix, self.streaming_text));
+            self.replace_streaming_text(format!("{}{}", prefix, self.streaming.streaming_text));
         }
     }
 
@@ -2388,10 +2388,10 @@ impl App {
             return;
         }
         // Separate the reasoning block from any prior content with a blank line.
-        if !self.streaming_text.is_empty() {
-            if self.streaming_text.ends_with("\n\n") {
+        if !self.streaming.streaming_text.is_empty() {
+            if self.streaming.streaming_text.ends_with("\n\n") {
                 // already separated
-            } else if self.streaming_text.ends_with('\n') {
+            } else if self.streaming.streaming_text.ends_with('\n') {
                 self.append_streaming_text("\n");
             } else {
                 self.append_streaming_text("\n\n");
@@ -2446,8 +2446,8 @@ impl App {
         self.reasoning_streaming = false;
         // Terminate the reasoning block with a blank line so following output
         // renders as a normal paragraph.
-        if !self.streaming_text.ends_with("\n\n") {
-            if self.streaming_text.ends_with('\n') {
+        if !self.streaming.streaming_text.ends_with("\n\n") {
+            if self.streaming.streaming_text.ends_with('\n') {
                 self.append_streaming_text("\n");
             } else {
                 self.append_streaming_text("\n\n");
@@ -2459,7 +2459,7 @@ impl App {
         if text.is_empty() {
             return;
         }
-        self.streaming_text.push_str(text);
+        self.streaming.streaming_text.push_str(text);
         self.refresh_split_view_if_needed();
     }
 
@@ -2478,12 +2478,12 @@ impl App {
     }
 
     pub(super) fn replace_streaming_text(&mut self, text: String) {
-        self.streaming_text = text;
+        self.streaming.streaming_text = text;
         self.refresh_split_view_if_needed();
     }
 
     pub(super) fn clear_streaming_render_state(&mut self) {
-        self.streaming_text.clear();
+        self.streaming.streaming_text.clear();
         self.stream_message_ended = false;
         self.reasoning_streaming = false;
         self.reasoning_pending_line.clear();
@@ -2493,7 +2493,7 @@ impl App {
     }
 
     pub(super) fn take_streaming_text(&mut self) -> String {
-        let content = std::mem::take(&mut self.streaming_text);
+        let content = std::mem::take(&mut self.streaming.streaming_text);
         self.stream_message_ended = false;
         self.reasoning_streaming = false;
         self.reasoning_pending_line.clear();
@@ -2508,7 +2508,7 @@ impl App {
             self.append_streaming_text(&chunk);
         }
 
-        if self.streaming_text.is_empty() {
+        if self.streaming.streaming_text.is_empty() {
             self.stream_buffer.clear();
             return false;
         }
@@ -2537,8 +2537,8 @@ impl App {
             // treat this as a reset and count the full value once.
             output_tokens
         };
-        if self.streaming_tps_collect_output {
-            self.streaming_total_output_tokens += delta;
+        if self.streaming.streaming_tps_collect_output {
+            self.streaming.streaming_total_output_tokens += delta;
             if delta > 0 {
                 self.snapshot_streaming_tps();
             }
@@ -2753,19 +2753,19 @@ impl App {
         self.thinking_prefix_emitted = false;
         self.thinking_buffer.clear();
         self.streaming_tool_calls.clear();
-        self.streaming_input_tokens = 0;
-        self.streaming_output_tokens = 0;
-        self.streaming_cache_read_tokens = None;
-        self.streaming_cache_creation_tokens = None;
+        self.streaming.streaming_input_tokens = 0;
+        self.streaming.streaming_output_tokens = 0;
+        self.streaming.streaming_cache_read_tokens = None;
+        self.streaming.streaming_cache_creation_tokens = None;
         self.kv_cache.current_api_usage_recorded = false;
         self.upstream_provider = None;
         self.status_detail = None;
-        self.streaming_tps_start = None;
-        self.streaming_tps_elapsed = Duration::ZERO;
-        self.streaming_tps_collect_output = false;
-        self.streaming_total_output_tokens = 0;
-        self.streaming_tps_observed_output_tokens = 0;
-        self.streaming_tps_observed_elapsed = Duration::ZERO;
+        self.streaming.streaming_tps_start = None;
+        self.streaming.streaming_tps_elapsed = Duration::ZERO;
+        self.streaming.streaming_tps_collect_output = false;
+        self.streaming.streaming_total_output_tokens = 0;
+        self.streaming.streaming_tps_observed_output_tokens = 0;
+        self.streaming.streaming_tps_observed_elapsed = Duration::ZERO;
         self.processing_started = Some(Instant::now());
         self.visible_turn_started = Some(Instant::now());
         self.pending_turn = true;
@@ -2821,19 +2821,19 @@ impl App {
             self.thinking_prefix_emitted = false;
             self.thinking_buffer.clear();
             self.streaming_tool_calls.clear();
-            self.streaming_input_tokens = 0;
-            self.streaming_output_tokens = 0;
-            self.streaming_cache_read_tokens = None;
-            self.streaming_cache_creation_tokens = None;
+            self.streaming.streaming_input_tokens = 0;
+            self.streaming.streaming_output_tokens = 0;
+            self.streaming.streaming_cache_read_tokens = None;
+            self.streaming.streaming_cache_creation_tokens = None;
             self.kv_cache.current_api_usage_recorded = false;
             self.upstream_provider = None;
             self.status_detail = None;
-            self.streaming_tps_start = None;
-            self.streaming_tps_elapsed = Duration::ZERO;
-            self.streaming_tps_collect_output = false;
-            self.streaming_total_output_tokens = 0;
-            self.streaming_tps_observed_output_tokens = 0;
-            self.streaming_tps_observed_elapsed = Duration::ZERO;
+            self.streaming.streaming_tps_start = None;
+            self.streaming.streaming_tps_elapsed = Duration::ZERO;
+            self.streaming.streaming_tps_collect_output = false;
+            self.streaming.streaming_total_output_tokens = 0;
+            self.streaming.streaming_tps_observed_output_tokens = 0;
+            self.streaming.streaming_tps_observed_elapsed = Duration::ZERO;
             self.processing_started = Some(Instant::now());
             if has_combined {
                 if preserve_visible_turn {

@@ -590,7 +590,7 @@ fn test_submit_input_commits_pending_streaming_assistant_text_before_user_messag
             intent: None, thought_signature: None, },
     ));
     app.bump_display_messages_version();
-    app.streaming_text = "Here is the final paragraph".to_string();
+    app.streaming.streaming_text = "Here is the final paragraph".to_string();
     assert_eq!(app.stream_buffer.push(" that was still buffered."), None);
 
     app.input = "follow up".to_string();
