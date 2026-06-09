@@ -38,6 +38,8 @@ mod input;
 #[cfg(target_os = "macos")]
 mod keys;
 #[cfg(target_os = "macos")]
+mod observe;
+#[cfg(target_os = "macos")]
 mod osa;
 #[cfg(target_os = "macos")]
 mod screen;

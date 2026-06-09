@@ -37,7 +37,10 @@ Element handle = {app:\"AppName\", path:[child indices from the front window]} f
 - set_value      {element, value}                       -> set a field's value (background type)
 - get_value      {element}
 - perform_action {element, ax_action}                   -> any AX action, e.g. 'AXShowMenu'
-- select_menu    {app, menu_path:[\"File\",\"Save\"]}      -> drive the menu bar";
+- select_menu    {app, menu_path:[\"File\",\"Save\"]}      -> drive the menu bar
+Observability: press/set_value/perform_action briefly highlight the target on screen when its
+window is visible (click-through, non-activating, ~280ms); if it is occluded/off-screen they add a
+text notice instead (never a misleading overlay). Set JCODE_COMPUTER_HIGHLIGHT=0 to disable.";
 
 const WINDOWS: &str = "\
 window actions (act on an app's front window; AX-based, can target background windows):

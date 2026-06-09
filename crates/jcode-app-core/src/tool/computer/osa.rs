@@ -34,6 +34,11 @@ pub fn run_jxa(script: &str) -> Result<String> {
     run(&["-l", "JavaScript", "-e", script], "JXA", DEFAULT_TIMEOUT)
 }
 
+/// Run a JXA script with an explicit timeout.
+pub fn run_jxa_timeout(script: &str, timeout: Duration) -> Result<String> {
+    run(&["-l", "JavaScript", "-e", script], "JXA", timeout)
+}
+
 fn run(args: &[&str], lang: &str, timeout: Duration) -> Result<String> {
     let (status, stdout, stderr) = run_command_timed("/usr/bin/osascript", args, timeout)?;
 

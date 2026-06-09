@@ -98,7 +98,11 @@ async fn coverage_ax() {
     let el = json!({"app":"TextEdit","path":[1,1]});
     ok(json!({"action":"set_value","element":el,"value":"ax-coverage"})).await;
     let g = ok(json!({"action":"get_value","element":el})).await;
-    assert!(g.output.contains("ax-coverage"), "get_value got: {}", g.output);
+    assert!(
+        g.output.contains("ax-coverage"),
+        "get_value got: {}",
+        g.output
+    );
     textedit_quit().await;
 }
 
@@ -108,7 +112,8 @@ async fn coverage_select_menu() {
     textedit_new().await;
     // Format menu exists in TextEdit; "Make Plain Text" or "Wrap to Page" toggles.
     // Use a stable, reversible item: Edit > Select All.
-    let r = act(json!({"action":"select_menu","app":"TextEdit","menu_path":["Edit","Select All"]})).await;
+    let r = act(json!({"action":"select_menu","app":"TextEdit","menu_path":["Edit","Select All"]}))
+        .await;
     match r {
         Ok(o) => eprintln!("PASS select_menu -> {}", o.output),
         Err(e) => panic!("FAIL select_menu -> {e}"),
@@ -150,7 +155,8 @@ async fn coverage_clipboard_scripting_system() {
     ok(json!({"action":"notify","text":"jcode coverage test","title":"jcode"})).await;
     // wait_for against a known app/text with short timeout (Finder always has a menu)
     textedit_new().await;
-    let _ = act(json!({"action":"wait_for","app":"TextEdit","contains":"","timeout_ms":1500})).await;
+    let _ =
+        act(json!({"action":"wait_for","app":"TextEdit","contains":"","timeout_ms":1500})).await;
     textedit_quit().await;
     // set_brightness may be unavailable; tolerate.
     match act(json!({"action":"set_brightness","level":0.8})).await {
@@ -166,8 +172,56 @@ async fn coverage_destructive_quit_close() {
     ok(json!({"action":"close_window","app":"TextEdit"})).await;
     // A new empty doc closes without a sheet. Discard anything then quit.
     let _ = act(json!({"action":"run_applescript","script":
-        "tell application \"TextEdit\" to close every document saving no"})).await;
+        "tell application \"TextEdit\" to close every document saving no"}))
+    .await;
     ok(json!({"action":"quit_app","app":"TextEdit"})).await;
+}
+
+/// Issue #348: a background `set_value` on a *visible* TextEdit window should
+/// (a) succeed, (b) append the truthful observability notice to the output, and
+/// (c) not move the cursor. We can't assert pixels, but we assert the notice and
+/// that the action still completes (the highlight is fire-and-forget).
+#[tokio::test]
+#[ignore = "live"]
+async fn coverage_observability_signal_visible() {
+    textedit_new().await;
+    // Bring TextEdit forward so its window is unquestionably visible/topmost.
+    ok(json!({"action":"activate_app","app":"TextEdit"})).await;
+    let el = json!({"app":"TextEdit","path":[1,1]});
+    let out = ok(json!({"action":"set_value","element":el,"value":"observe-348"})).await;
+    assert!(
+        out.output.contains("observability:"),
+        "expected an observability notice, got: {}",
+        out.output
+    );
+    // The value still took effect (signal must not break the action).
+    let g = ok(json!({"action":"get_value","element":el})).await;
+    assert!(
+        g.output.contains("observe-348"),
+        "get_value got: {}",
+        g.output
+    );
+    textedit_quit().await;
+}
+
+/// With the signal disabled via env, no notice is appended and the action still
+/// works. Guards the opt-out path.
+#[tokio::test]
+#[ignore = "live"]
+async fn coverage_observability_signal_disabled() {
+    // SAFETY: single-threaded ignored live test; we set + unset around the call.
+    unsafe { std::env::set_var("JCODE_COMPUTER_HIGHLIGHT", "0") };
+    textedit_new().await;
+    ok(json!({"action":"activate_app","app":"TextEdit"})).await;
+    let el = json!({"app":"TextEdit","path":[1,1]});
+    let out = ok(json!({"action":"set_value","element":el,"value":"observe-off"})).await;
+    assert!(
+        !out.output.contains("observability:"),
+        "expected NO notice when disabled, got: {}",
+        out.output
+    );
+    textedit_quit().await;
+    unsafe { std::env::remove_var("JCODE_COMPUTER_HIGHLIGHT") };
 }
 
 /// Parse the first CG window id whose owner matches `owner` from list_windows

@@ -9,6 +9,7 @@
 //! 1-based child indices from the front window. `find_element` / `ui` return
 //! these paths; the action verbs accept them.
 
+use super::observe;
 use super::osa;
 use anyhow::{Result, bail};
 use jcode_tool_types::ToolOutput;
@@ -209,14 +210,28 @@ end tell
     .with_title("find_element"))
 }
 
+/// Append the truthful observability signal for a background AX action: flash
+/// the element on screen if it is visible, otherwise note that it was occluded /
+/// off-screen (issue #348). Never fails the action: the action has already run.
+fn with_observability(handle: &ElementHandle, out: ToolOutput) -> ToolOutput {
+    match observe::signal_background_action(&handle.app, &handle.path) {
+        Some(notice) => {
+            let combined = format!("{}\n{notice}", out.output);
+            ToolOutput { output: combined, ..out }
+        }
+        None => out,
+    }
+}
+
 /// Perform AXPress on an element (background click).
 pub fn press(handle: &ElementHandle) -> Result<ToolOutput> {
     let body = format!("perform action \"AXPress\" of ({})", handle.resolve_script());
     osa::run_applescript_timeout(&tell(&handle.app, &body), Duration::from_secs(10))?;
-    Ok(ToolOutput::new(format!(
+    let out = ToolOutput::new(format!(
         "pressed element {:?} in {} (no cursor movement)",
         handle.path, handle.app
-    )))
+    ));
+    Ok(with_observability(handle, out))
 }
 
 /// Perform an arbitrary AX action on an element.
@@ -227,10 +242,11 @@ pub fn perform_action(handle: &ElementHandle, ax_action: &str) -> Result<ToolOut
         handle.resolve_script()
     );
     osa::run_applescript_timeout(&tell(&handle.app, &body), Duration::from_secs(10))?;
-    Ok(ToolOutput::new(format!(
+    let out = ToolOutput::new(format!(
         "performed {ax_action} on element {:?} in {}",
         handle.path, handle.app
-    )))
+    ));
+    Ok(with_observability(handle, out))
 }
 
 /// Set the value of an element (background typing into a field).
@@ -241,12 +257,13 @@ pub fn set_value(handle: &ElementHandle, value: &str) -> Result<ToolOutput> {
         osa::as_quote(value)
     );
     osa::run_applescript_timeout(&tell(&handle.app, &body), Duration::from_secs(10))?;
-    Ok(ToolOutput::new(format!(
+    let out = ToolOutput::new(format!(
         "set value of element {:?} in {} to {} chars",
         handle.path,
         handle.app,
         value.chars().count()
-    )))
+    ));
+    Ok(with_observability(handle, out))
 }
 
 /// Read the value of an element.
