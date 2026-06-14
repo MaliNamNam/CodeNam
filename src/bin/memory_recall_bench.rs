@@ -698,6 +698,22 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
     let queries = read_queries()?;
     let gold = read_gold()?;
 
+    // For `prod_hybrid`: seed a temp JCODE_HOME project graph with the corpus and
+    // exercise the REAL shipped MemoryManager::find_similar_hybrid end-to-end.
+    let prod_mgr = if config == "prod_hybrid" {
+        let tmp = std::env::temp_dir().join(format!("memrecall-prod-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp)?;
+        // SAFETY: single-threaded setup before any embedding work.
+        unsafe { std::env::set_var("JCODE_HOME", &tmp) };
+        let project_dir = "/bench/prod-validate";
+        let mgr = jcode::memory::MemoryManager::new().with_project_dir(project_dir);
+        let graph = load_graph(Path::new(&graph_file))?;
+        mgr.save_project_graph(&graph)?;
+        Some(mgr)
+    } else {
+        None
+    };
+
     let mut recall5 = 0.0;
     let mut recall10 = 0.0;
     let mut mrr = 0.0;
@@ -763,6 +779,16 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
                 let dense = dense_retrieve(&q_emb_focused, &corpus, 0.0, 50, false);
                 let lex = bm25.search(&focused, 50);
                 rrf(&[dense, lex], 60.0, EMBEDDING_MAX_HITS).into_iter().map(|(id, _)| id).collect()
+            }
+            "prod_hybrid" => {
+                // Validate the ACTUAL shipped production method end-to-end.
+                prod_mgr
+                    .as_ref()
+                    .expect("prod manager")
+                    .find_similar_hybrid(&q.query, &q_emb, EMBEDDING_MAX_HITS)?
+                    .into_iter()
+                    .map(|(e, _)| e.id)
+                    .collect()
             }
             other => anyhow::bail!("unknown config: {other}"),
         };
