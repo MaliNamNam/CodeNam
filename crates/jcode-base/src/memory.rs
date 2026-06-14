@@ -52,7 +52,8 @@ pub use pending::{
     take_pending_memory,
 };
 use pending::{begin_memory_check, finish_memory_check};
-pub(crate) use prompt_support::{format_context_for_extraction, format_context_for_relevance};
+pub(crate) use prompt_support::format_context_for_extraction;
+pub use prompt_support::format_context_for_relevance;
 
 const LEGACY_NOTE_CATEGORY: &str = "note";
 const MEMORY_RELEVANCE_MAX_CANDIDATES: usize = 30;
