@@ -167,3 +167,4 @@ fn onboarding_not_found_panel_shows_scroll_affordance_when_overflowing() {
         "overflowing panel should show a scroll affordance:\n{text}"
     );
 }
+
