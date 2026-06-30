@@ -156,7 +156,66 @@ private func event(_ line: String) -> ConnectionOutput {
     #expect(state.isProcessing == false)
     #expect(state.transcript.last?.text == "partial")
     #expect(state.transcript.last?.isStreaming == false)
-    #expect(state.notices.contains("Interrupted"))
+    #expect(state.notices.contains { $0.message == "Interrupted" })
+}
+
+// MARK: - Notices (notifications / compaction / dismissal)
+
+@Test func notificationBecomesDismissibleNotice() {
+    let state = run([
+        event(#"{"type":"notification","from_name":"swarm","message":"build done"}"#)
+    ])
+    #expect(state.notices.count == 1)
+    #expect(state.notices[0].kind == .notification)
+    #expect(state.notices[0].message == "swarm: build done")
+}
+
+@Test func notificationWithoutSenderHasNoPrefix() {
+    let state = run([
+        event(#"{"type":"notification","message":"heads up"}"#)
+    ])
+    #expect(state.notices[0].message == "heads up")
+}
+
+@Test func foregroundCompactionSurfacesNotice() {
+    let state = run([
+        event(#"{"type":"compaction","trigger":"manual","tokens_saved":1234}"#)
+    ])
+    #expect(state.notices.count == 1)
+    #expect(state.notices[0].kind == .compaction)
+    #expect(state.notices[0].message.contains("1234"))
+}
+
+@Test func backgroundCompactionIsSilent() {
+    let state = run([
+        event(#"{"type":"compaction","trigger":"background","tokens_saved":50}"#)
+    ])
+    #expect(state.notices.isEmpty)
+}
+
+@Test func dismissNoticeRemovesOnlyThatNotice() {
+    var state = run([
+        event(#"{"type":"notification","message":"first"}"#),
+        event(#"{"type":"notification","message":"second"}"#),
+    ])
+    #expect(state.notices.count == 2)
+    let firstID = state.notices[0].id
+    state = SessionReducer.reduce(state, intent: .dismissNotice(firstID))
+    #expect(state.notices.count == 1)
+    #expect(state.notices[0].message == "second")
+}
+
+@Test func clearedConversationWipesTranscriptButKeepsSession() {
+    var state = run([
+        event(#"{"type":"session","session_id":"sess_keep"}"#),
+        event(#"{"type":"text_delta","text":"stale"}"#),
+        event(#"{"type":"done","id":1}"#),
+    ])
+    #expect(!state.transcript.isEmpty)
+    state = SessionReducer.reduce(state, intent: .clearedConversation)
+    #expect(state.transcript.isEmpty)
+    #expect(state.isProcessing == false)
+    #expect(state.sessionID == "sess_keep")
 }
 
 @Test func emptyStreamingStubIsDropped() {

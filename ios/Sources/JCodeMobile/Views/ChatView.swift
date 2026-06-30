@@ -18,6 +18,14 @@ struct ChatView: View {
                 .padding(.bottom, 8)
             }
 
+            if !model.session.notices.isEmpty {
+                NoticeStack(
+                    notices: model.session.notices,
+                    onDismiss: { model.dismissNotice($0) }
+                )
+                .padding(.bottom, 8)
+            }
+
             TranscriptView(
                 entries: model.session.transcript,
                 isReasoning: model.session.isReasoning

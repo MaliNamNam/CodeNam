@@ -59,6 +59,28 @@ public struct TranscriptEntry: Equatable, Sendable, Identifiable {
     }
 }
 
+/// A transient, user-dismissible notice surfaced to the UI.
+///
+/// Covers out-of-band server signals that must never be silently dropped:
+/// push notifications, interrupts, and context compaction events.
+public struct Notice: Equatable, Sendable, Identifiable {
+    public enum Kind: Equatable, Sendable {
+        case info
+        case notification
+        case compaction
+    }
+
+    public var id: UUID
+    public var kind: Kind
+    public var message: String
+
+    public init(id: UUID = UUID(), kind: Kind = .info, message: String) {
+        self.id = id
+        self.kind = kind
+        self.message = message
+    }
+}
+
 /// Full client-side session state derived from server events.
 public struct SessionState: Equatable, Sendable {
     public var phase: ConnectionPhase
@@ -76,7 +98,7 @@ public struct SessionState: Equatable, Sendable {
     public var tokenOutput: UInt64
     public var statusDetail: String?
     public var errorBanner: String?
-    public var notices: [String]
+    public var notices: [Notice]
 
     public init() {
         phase = .disconnected
@@ -106,6 +128,11 @@ public enum LocalIntent: Equatable, Sendable {
     case userQueuedInterrupt(String)
     /// Dismiss the current error banner.
     case dismissError
+    /// Dismiss a transient notice by id.
+    case dismissNotice(UUID)
+    /// User cleared the conversation; wipe the transcript optimistically while
+    /// keeping the connection and session metadata.
+    case clearedConversation
     /// Reset everything (switching servers/sessions).
     case reset
 }
@@ -134,6 +161,13 @@ public enum SessionReducer {
         case .userQueuedInterrupt(let text):
             state.transcript.append(TranscriptEntry(role: .user, text: text))
         case .dismissError:
+            state.errorBanner = nil
+        case .dismissNotice(let id):
+            state.notices.removeAll { $0.id == id }
+        case .clearedConversation:
+            state.transcript = []
+            state.isProcessing = false
+            state.isReasoning = false
             state.errorBanner = nil
         case .reset:
             state = SessionState()
@@ -230,7 +264,7 @@ public enum SessionReducer {
             state.isProcessing = false
             state.isReasoning = false
             finishStreaming(&state)
-            state.notices.append("Interrupted")
+            state.notices.append(Notice(message: "Interrupted"))
 
         case .error(_, let message, let retryAfterSecs):
             state.isProcessing = false
@@ -279,12 +313,13 @@ public enum SessionReducer {
 
         case .compaction(let trigger, let tokensSaved):
             if let saved = tokensSaved, trigger != "background" {
-                state.notices.append("Context compacted (\(saved) tokens saved)")
+                state.notices.append(
+                    Notice(kind: .compaction, message: "Context compacted (\(saved) tokens saved)"))
             }
 
         case .notification(let fromName, let message):
             let prefix = fromName.map { "\($0): " } ?? ""
-            state.notices.append(prefix + message)
+            state.notices.append(Notice(kind: .notification, message: prefix + message))
 
         case .ack, .pong, .unknown:
             break

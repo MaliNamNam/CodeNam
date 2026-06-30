@@ -115,3 +115,65 @@ struct ErrorBanner: View {
         .padding(.horizontal)
     }
 }
+
+/// Stack of dismissible notices for out-of-band server signals
+/// (push notifications, interrupts, context compaction).
+struct NoticeStack: View {
+    let notices: [Notice]
+    let onDismiss: (UUID) -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(notices) { notice in
+                NoticeRow(notice: notice) { onDismiss(notice.id) }
+            }
+        }
+        .padding(.horizontal)
+    }
+}
+
+private struct NoticeRow: View {
+    let notice: Notice
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+            Text(notice.message)
+                .font(.footnote)
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(3)
+            Spacer(minLength: 0)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        }
+        .padding(12)
+        .background(tint.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(tint.opacity(0.35), lineWidth: 1)
+        )
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private var icon: String {
+        switch notice.kind {
+        case .info: "info.circle.fill"
+        case .notification: "bell.fill"
+        case .compaction: "arrow.down.right.and.arrow.up.left"
+        }
+    }
+
+    private var tint: Color {
+        switch notice.kind {
+        case .info: Theme.textSecondary
+        case .notification: Theme.mint
+        case .compaction: Theme.warning
+        }
+    }
+}

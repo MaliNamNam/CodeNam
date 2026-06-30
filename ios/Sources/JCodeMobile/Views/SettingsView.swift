@@ -81,6 +81,14 @@ struct SettingsView: View {
                     .foregroundStyle(Theme.textPrimary)
             }
             .listRowBackground(Theme.surface)
+            Button {
+                model.clearConversation()
+                dismiss()
+            } label: {
+                Label("New session (clear)", systemImage: "square.and.pencil")
+                    .foregroundStyle(Theme.mint)
+            }
+            .listRowBackground(Theme.surface)
         }
     }
 

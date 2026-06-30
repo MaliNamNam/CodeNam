@@ -134,6 +134,21 @@ final class AppModel {
         session = SessionReducer.reduce(session, intent: .dismissError)
     }
 
+    func dismissNotice(_ id: UUID) {
+        session = SessionReducer.reduce(session, intent: .dismissNotice(id))
+    }
+
+    /// Clears the current conversation on the server and optimistically locally.
+    func clearConversation() {
+        session = SessionReducer.reduce(session, intent: .clearedConversation)
+        send { .clear(id: $0) }
+    }
+
+    /// Drops any soft-interrupt messages queued mid-run before they inject.
+    func cancelQueuedInterrupts() {
+        send { .cancelSoftInterrupts(id: $0) }
+    }
+
     // MARK: - Helpers
 
     private func send(_ build: @escaping @Sendable (UInt64) -> Request) {
