@@ -103,12 +103,16 @@ fn test_anthropic_reasoning_effort_request_parts() {
 
     assert_eq!(
         provider.available_efforts(),
-        vec!["none", "low", "medium", "high", "swarm", "swarm-deep"]
+        vec!["none", "low", "medium", "high", "max", "swarm", "swarm-deep"]
     );
     assert_eq!(provider.reasoning_effort().as_deref(), Some("none"));
 
+    // Sonnet 4.6 supports the real `max` API level (but not `xhigh`).
     provider.set_reasoning_effort("max").unwrap();
-    assert_eq!(provider.reasoning_effort().as_deref(), Some("high"));
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
+
+    // `xhigh` is rejected on models that do not support it.
+    assert!(provider.set_reasoning_effort("xhigh").is_err());
 
     provider.set_reasoning_effort("medium").unwrap();
     let (thinking, output_config, temperature) =
@@ -278,17 +282,41 @@ fn test_anthropic_show_thinking_enables_manual_thinking_without_effort() {
 
 #[test]
 fn test_anthropic_max_alias_uses_strongest_real_effort() {
+    // `max` is a real API level on output_config effort models.
     assert_eq!(
         AnthropicProvider::actual_effort_for_model("claude-sonnet-4-6", "max"),
-        "high"
+        "max"
     );
     assert_eq!(
         AnthropicProvider::actual_effort_for_model("claude-opus-4-7", "max"),
-        "xhigh"
+        "max"
     );
     assert_eq!(
         AnthropicProvider::actual_effort_for_model("claude-opus-4-8", "max"),
-        "xhigh"
+        "max"
+    );
+    // Manual-thinking models (no output_config) clamp max to high.
+    assert_eq!(
+        AnthropicProvider::actual_effort_for_model("claude-opus-4-5", "max"),
+        "high"
+    );
+    // xhigh still clamps to high where unsupported.
+    assert_eq!(
+        AnthropicProvider::actual_effort_for_model("claude-sonnet-4-6", "xhigh"),
+        "high"
+    );
+    // Swarm rungs pin to the strongest supported level.
+    assert_eq!(
+        AnthropicProvider::actual_effort_for_model("claude-opus-4-8", "swarm"),
+        "max"
+    );
+    assert_eq!(
+        AnthropicProvider::actual_effort_for_model("claude-sonnet-4-6", "swarm-deep"),
+        "max"
+    );
+    assert_eq!(
+        AnthropicProvider::actual_effort_for_model("claude-opus-4-5", "swarm"),
+        "high"
     );
 }
 
@@ -1412,13 +1440,13 @@ fn test_anthropic_fable_5_sends_reasoning_fields() {
     );
     assert_eq!(temperature, None);
 
-    // Fable 5 supports xhigh, so `max` resolves to xhigh.
+    // Fable 5 supports the real `max` API level, so `max` is sent verbatim.
     *provider.reasoning_effort.write().unwrap() = Some("max".to_string());
     let (_thinking, output_config, _temp) =
         provider.build_reasoning_request_parts_inner("claude-fable-5", true, false);
     assert_eq!(
         output_config.as_ref().map(|c| c.effort.as_str()),
-        Some("xhigh")
+        Some("max")
     );
 
     // The effort picker surfaces levels for Fable 5.
@@ -1474,6 +1502,10 @@ fn detects_anthropic_model_not_found_errors() {
 
 #[test]
 fn anthropic_fallback_prefers_best_available_and_skips_tried_and_retired() {
+    // The fallback logic reads the process-global model catalog; lock and
+    // reset it so fixture models hydrated by other tests cannot leak in.
+    let _guard = crate::storage::lock_test_env();
+    crate::provider::models::reset_model_catalog_services_for_tests();
     let known = crate::provider::known_anthropic_model_ids();
     assert!(
         !known.is_empty(),
@@ -1511,6 +1543,11 @@ fn anthropic_fallback_prefers_best_available_and_skips_tried_and_retired() {
 
 #[test]
 fn anthropic_fallback_honors_server_recommendation() {
+    // The recommendation matcher scores hints against the process-global model
+    // catalog; lock and reset it so fixture models hydrated by other tests
+    // (e.g. claude-opus-5-preview) cannot outrank the real catalog entries.
+    let _guard = crate::storage::lock_test_env();
+    crate::provider::models::reset_model_catalog_services_for_tests();
     // The real 404 body recommends a specific replacement model. We must honor
     // it over the generic quality ranking.
     let body = "anthropic api error (404 not found): {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"claude fable 5 is not available. please use opus 4.8. learn more: https://anthropic.com\"}}";

@@ -219,7 +219,10 @@ const DESKTOP_SLASH_COMMANDS: &[(&str, &str)] = &[
 pub(crate) const DESKTOP_SLASH_SUGGESTION_ROW_LIMIT: usize = 7;
 
 const DESKTOP_REASONING_EFFORTS_OPENAI: &[&str] = &["none", "low", "medium", "high", "xhigh"];
-const DESKTOP_REASONING_EFFORTS_ANTHROPIC_STANDARD: &[&str] = &["none", "low", "medium", "high"];
+const DESKTOP_REASONING_EFFORTS_ANTHROPIC_STANDARD: &[&str] =
+    &["none", "low", "medium", "high", "max"];
+const DESKTOP_REASONING_EFFORTS_ANTHROPIC_XHIGH: &[&str] =
+    &["none", "low", "medium", "high", "xhigh", "max"];
 const DESKTOP_REASONING_EFFORTS_DEEPSEEK: &[&str] = &["none", "low", "medium", "high", "max"];
 
 #[cfg_attr(test, allow(dead_code))]

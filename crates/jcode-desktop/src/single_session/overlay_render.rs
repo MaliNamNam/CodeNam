@@ -899,8 +899,12 @@ pub(crate) fn inferred_desktop_reasoning_efforts(
         || model.starts_with("claude-")
         || model.contains("/claude-");
     if is_anthropic {
-        if model.contains("claude-opus-4-7") || current == "xhigh" {
-            return DESKTOP_REASONING_EFFORTS_OPENAI;
+        if model.contains("claude-opus-4-7")
+            || model.contains("claude-opus-4-8")
+            || model.contains("claude-fable-5")
+            || current == "xhigh"
+        {
+            return DESKTOP_REASONING_EFFORTS_ANTHROPIC_XHIGH;
         }
         return DESKTOP_REASONING_EFFORTS_ANTHROPIC_STANDARD;
     }
