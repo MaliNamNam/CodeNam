@@ -141,7 +141,7 @@ CLI events (sent by jcode itself): `install`, `upgrade`, `auth_success`,
 
 ### Website analytics events (migration 0016)
 
-Sent by the beacon on `https://solosystems.dev` (and the
+Sent by the beacon on `https://jcode.sh` (and the
 `https://solosystems.pages.dev` preview). The browser mints an anonymous
 `visitor_id` UUID in localStorage; the worker uses it as the telemetry id and
 fills in `version`/`os`/`arch` defaults, so the beacon payload can stay tiny.

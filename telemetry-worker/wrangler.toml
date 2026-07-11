@@ -3,11 +3,10 @@ main = "src/worker.js"
 compatibility_date = "2025-01-01"
 
 # Custom domain for the website beacon (jcode-website public/beacon.js posts
-# here). jcode.dev is not a zone in this Cloudflare account, so the beacon
-# domain lives under solosystems.dev. Managed as a Workers custom domain:
-# Cloudflare creates the DNS record and cert automatically on deploy.
+# here). Managed as a Workers custom domain, so Cloudflare creates the DNS
+# record and certificate automatically on deploy.
 routes = [
-  { pattern = "telemetry.solosystems.dev", custom_domain = true }
+  { pattern = "telemetry.jcode.sh", custom_domain = true }
 ]
 
 # Nightly retention prune (see RETENTION_DAYS in src/worker.js). D1 hard-caps

@@ -40,7 +40,7 @@ const KNOWN_EVENTS = [...CLI_EVENTS, ...WEB_EVENTS, ...SUBSCRIPTION_EVENTS];
 // allowlisted origins are echoed back explicitly so the policy keeps working
 // if ALLOWED_ORIGIN is ever narrowed.
 const WEB_ALLOWED_ORIGINS = new Set([
-  "https://solosystems.dev",
+  "https://jcode.sh",
   "https://solosystems.pages.dev",
 ]);
 

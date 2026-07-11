@@ -6,7 +6,7 @@
 //! prompt.
 //! Sponsors buy placement (discoverability), never recommendations. The
 //! policy is disclosed in the UI with a `(sponsored discovery)` tag whose
-//! definition lives at <https://solosystems.dev/sponsored-discovery>.
+//! definition lives at <https://jcode.sh/sponsored-discovery>.
 //!
 //! Design constraints (see the sponsored-discovery page for the public
 //! version of this policy):
@@ -23,7 +23,7 @@
 //!   never session content.
 
 /// Public URL explaining what sponsored discovery is.
-pub const SPONSORED_DISCOVERY_URL: &str = "https://solosystems.dev/sponsored-discovery";
+pub const SPONSORED_DISCOVERY_URL: &str = "https://jcode.sh/sponsored-discovery";
 
 /// Provenance tagging and coarse usage metering for MCP servers connected
 /// as a result of a discovery listing.
@@ -34,7 +34,7 @@ pub const SPONSORED_DISCOVERY_TAG: &str = "(sponsored discovery)";
 
 /// First-use-per-session disclosure line rendered in the TUI.
 pub const SPONSORED_DISCOVERY_NOTICE: &str = "sponsors make tools discoverable, never recommended \
-     \u{b7} solosystems.dev/sponsored-discovery";
+     \u{b7} jcode.sh/sponsored-discovery";
 
 /// Categories in which discoverable tools exist. Shipped as a constant so the
 /// tool schema never depends on the network. The tools within each category are

@@ -129,7 +129,7 @@ enable provenance tagging or coarse usage metering.
 
 ## 4. Implement the two API phases
 
-The default client sends `GET https://api.solosystems.dev/v1/discovery` with a
+The default client sends `GET https://api.jcode.sh/v1/discovery` with a
 three-second timeout and a 64 KiB maximum response. It sends a
 `User-Agent: jcode/<version>` header and a random
 `x-jcode-discovery-request-id` correlation header.

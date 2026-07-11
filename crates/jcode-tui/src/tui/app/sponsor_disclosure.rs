@@ -65,6 +65,6 @@ mod tests {
         let message = disclosure_message();
         assert!(message.contains("(sponsored discovery)"));
         assert!(message.contains("never recommended"));
-        assert!(message.contains("solosystems.dev/sponsored-discovery"));
+        assert!(message.contains("jcode.sh/sponsored-discovery"));
     }
 }
