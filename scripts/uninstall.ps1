@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Uninstall jcode on Windows.
 .DESCRIPTION
@@ -163,6 +163,15 @@ function Remove-JcodeUserPath {
     return $update
 }
 
+
+function Invoke-JcodeUninstall {
+    param(
+        [string]$InstallDir,
+        [switch]$Purge,
+        [switch]$DryRun,
+        [switch]$Yes
+    )
+
 if (-not $InstallDir) { $InstallDir = Get-DefaultJcodeInstallDir }
 
 $localJcodeRoot = Join-Path (Get-JcodeLocalAppDataDir) "jcode"
@@ -188,7 +197,7 @@ if ($userPathPreview.RemovedManagedEntries -gt 0) {
 
 if ($targets.Count -eq 0) {
     Write-Info "Nothing to uninstall: no jcode installation found."
-    exit 0
+    return 0
 }
 
 Write-Info "The following will be removed:"
@@ -199,14 +208,14 @@ if (-not $Purge) {
 
 if ($DryRun) {
     Write-Info "Dry run: nothing was deleted."
-    exit 0
+    return 0
 }
 
 if (-not $Yes) {
     $reply = Read-Host "Proceed? [y/N]"
     if ($reply -notin @("y", "Y", "yes", "YES")) {
         Write-Info "Aborted."
-        exit 1
+        return 1
     }
 }
 
@@ -243,3 +252,12 @@ if ($pathUpdate.Changed) {
 
 Write-Info "jcode uninstalled."
 Write-Info "Reinstall with: irm https://raw.githubusercontent.com/1jehuang/jcode/master/scripts/install.ps1 | iex"
+
+
+    return 0
+}
+
+if ($env:JCODE_UNINSTALL_PS1_IMPORT_ONLY -ne "1") {
+    $exitCode = Invoke-JcodeUninstall -InstallDir $InstallDir -Purge:$Purge -DryRun:$DryRun -Yes:$Yes
+    if ($null -ne $exitCode) { exit ([int]$exitCode) }
+}

@@ -1,8 +1,10 @@
 use super::{SetupHintsState, StartupHints, read_choice};
 use crate::windows_hotkeys::{self, WindowsHotkey};
-use anyhow::Result;
+use anyhow::{Context, Result};
+use jcode_config_types::{LaunchHotkeyEntry, LaunchHotkeysConfig};
 use jcode_storage as storage;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 fn detect_terminal() -> &'static str {
     if std::env::var("WT_SESSION").is_ok() {
@@ -69,9 +71,13 @@ pub(super) fn find_alacritty_path() -> Option<String> {
 }
 
 /// Resolve the `[launch_hotkeys]` config into Windows listener entries.
-/// Empty config reproduces the built-in three hotkeys, matching macOS/Linux.
+/// Empty config uses the Windows Copilot-key chord (Win+Shift+F23), which is
+/// what current Copilot keyboards emit when their key is pressed.
 fn resolve_windows_hotkeys() -> Vec<WindowsHotkey> {
-    let config = super::load_launch_hotkeys_config();
+    let config = effective_windows_launch_hotkeys_config();
+    if config.enabled == Some(false) {
+        return Vec::new();
+    }
     let exe_path = std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "jcode".to_string());
@@ -85,8 +91,10 @@ fn resolve_windows_hotkeys() -> Vec<WindowsHotkey> {
         .into_iter()
         .filter_map(|entry| {
             let chord = crate::keymap::KeyChord::parse(&entry.chord)?;
+            let win_modifier = windows_hotkeys::raw_chord_uses_win_modifier(&entry.chord);
             Some(WindowsHotkey {
                 chord,
+                win_modifier,
                 dir: entry.dir,
                 self_dev: entry.args.iter().any(|a| a == "self-dev"),
                 label: entry.label,
@@ -98,143 +106,170 @@ fn resolve_windows_hotkeys() -> Vec<WindowsHotkey> {
 pub(super) fn primary_hotkey_display() -> Option<(String, String)> {
     resolve_windows_hotkeys()
         .into_iter()
-        .find(|entry| !entry.self_dev && windows_hotkeys::chord_to_win32(&entry.chord).is_some())
+        .find(|entry| !entry.self_dev && windows_hotkeys::hotkey_to_win32(entry).is_some())
         .map(|entry| {
             (
                 entry.chord.canonical(),
-                windows_hotkeys::display_windows(&entry.chord),
+                windows_hotkeys::display_windows_hotkey(&entry),
             )
         })
 }
 
-fn create_hotkey_shortcut(use_alacritty: bool) -> Result<()> {
-    let exe = std::env::current_exe()?;
-    let exe_path = exe.to_string_lossy();
+fn default_windows_launch_entries() -> Vec<LaunchHotkeyEntry> {
+    vec![LaunchHotkeyEntry {
+        chord: "win+shift+f23".to_string(),
+        dir: "$HOME".to_string(),
+        label: "home".to_string(),
+        self_dev: false,
+    }]
+}
+fn effective_windows_launch_hotkeys_config() -> LaunchHotkeysConfig {
+    let mut config = super::load_launch_hotkeys_config();
+    if config.entries.is_empty() {
+        config.entries = default_windows_launch_entries();
+    }
+    config
+}
 
-    let entries = resolve_windows_hotkeys();
-    let last_dir = super::mac_hotkey_last_dir_file()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let last_repo = super::mac_hotkey_last_repo_file()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
+fn startup_dir() -> PathBuf {
+    let appdata = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Roaming"));
+    appdata.join(r"Microsoft\Windows\Start Menu\Programs\Startup")
+}
+fn startup_shortcut_path() -> PathBuf {
+    startup_dir().join("jcode-hotkey.lnk")
+}
 
-    let (launch_exe, launch_args_for): (String, Box<dyn Fn(&WindowsHotkey) -> String>) =
-        if use_alacritty {
-            let alacritty_path = find_alacritty_path().unwrap_or_else(|| "alacritty".to_string());
-            let exe = exe_path.to_string();
-            (
-                alacritty_path,
-                Box::new(move |hk: &WindowsHotkey| {
-                    let hotkey = hk.chord.canonical();
-                    if hk.self_dev {
-                        format!("-e \"{exe}\" --spawn-hotkey \"{hotkey}\" self-dev")
-                    } else {
-                        format!("-e \"{exe}\" --spawn-hotkey \"{hotkey}\"")
-                    }
-                }),
-            )
-        } else {
-            let exe = exe_path.to_string();
-            (
-                "wt.exe".to_string(),
-                Box::new(move |hk: &WindowsHotkey| {
-                    let hotkey = hk.chord.canonical();
-                    if hk.self_dev {
-                        format!(
-                            "-p \"Command Prompt\" \"{exe}\" --spawn-hotkey \"{hotkey}\" self-dev"
-                        )
-                    } else {
-                        format!("-p \"Command Prompt\" \"{exe}\" --spawn-hotkey \"{hotkey}\"")
-                    }
-                }),
-            )
-        };
+fn hotkey_vbs_path() -> Result<PathBuf> {
+    Ok(storage::jcode_dir()?
+        .join("hotkey")
+        .join("jcode-hotkey-launcher.vbs"))
+}
 
-    let Some(ps1_content) = windows_hotkeys::render_windows_listener_ps1(
-        &entries,
-        &launch_exe,
-        |hk| launch_args_for(hk),
-        &last_dir,
-        &last_repo,
-    ) else {
-        anyhow::bail!("no registerable launch hotkeys in config");
-    };
+fn legacy_hotkey_ps1_path() -> Result<PathBuf> {
+    Ok(storage::jcode_dir()?
+        .join("hotkey")
+        .join("jcode-hotkey.ps1"))
+}
 
-    let hotkey_dir = storage::jcode_dir()?.join("hotkey");
-    std::fs::create_dir_all(&hotkey_dir)?;
+fn ps_single_quote(input: &str) -> String {
+    format!("'{}'", input.replace('\'', "''"))
+}
 
-    let _ = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-Process powershell, pwsh -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*jcode-hotkey*' } | Stop-Process -Force -ErrorAction SilentlyContinue",
-        ])
-        .output();
-
-    let ps1_path = hotkey_dir.join("jcode-hotkey.ps1");
-    std::fs::write(&ps1_path, &ps1_content)?;
-    let _ = std::fs::remove_file(hotkey_dir.join("jcode-hotkey-launcher.vbs"));
-
-    let startup_dir = format!(
-        "{}\\Microsoft\\Windows\\Start Menu\\Programs\\Startup",
-        std::env::var("APPDATA").unwrap_or_else(|_| "C:\\Users\\Default\\AppData\\Roaming".into())
+fn stop_windows_hotkey_listeners() {
+    let current_pid = std::process::id();
+    let script = format!(
+        r#"
+$current = {current_pid}
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object {{
+    ($_.ProcessId -ne $current) -and (
+      (($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.CommandLine -like '*jcode-hotkey*') -or
+      (($_.Name -eq 'jcode.exe') -and $_.CommandLine -like '*--listen-windows-hotkey*')
+    )
+  }} |
+  ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+"#
     );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output();
+}
 
-    // Point the Startup shortcut directly at PowerShell instead of adding a
-    // hidden VBScript trampoline. The listener file is generated locally, so
-    // RemoteSigned is sufficient and avoids the broad ExecutionPolicy Bypass
-    // behavior that endpoint security products reasonably treat as suspicious.
-    let ps1_path_for_powershell = ps1_path.to_string_lossy().replace('\'', "''");
-
-    let create_startup_lnk = format!(
+fn create_startup_shortcut(vbs_path: &Path) -> Result<()> {
+    let startup_dir = startup_dir();
+    std::fs::create_dir_all(&startup_dir)?;
+    let shortcut_path = startup_shortcut_path();
+    let vbs_arg = format!("'\"{}\"'", vbs_path.to_string_lossy().replace('\'', "''"));
+    let script = format!(
         r#"
 $ErrorActionPreference = "Stop"
 $shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut("{startup_dir}\jcode-hotkey.lnk")
-$shortcut.TargetPath = "powershell.exe"
-$shortcut.Arguments = '-NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File "{ps1_path}"'
-$shortcut.Description = "jcode Alt+; hotkey listener"
-$shortcut.WindowStyle = 7
+$shortcut = $shell.CreateShortcut({shortcut_path})
+$shortcut.TargetPath = 'wscript.exe'
+$shortcut.Arguments = {vbs_arg}
+$shortcut.Description = 'jcode Win+Shift+F23 hotkey listener'$shortcut.WindowStyle = 7
 $shortcut.Save()
-Write-Output "OK"
+Write-Output 'OK'
 "#,
-        startup_dir = startup_dir,
-        ps1_path = ps1_path_for_powershell,
+        shortcut_path = ps_single_quote(&shortcut_path.to_string_lossy()),
+        vbs_arg = vbs_arg,
     );
 
     let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", &create_startup_lnk])
+        .args(["-NoProfile", "-Command", &script])
         .output()?;
-
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to create startup shortcut: {}", stderr.trim());
+        anyhow::bail!(
+            "Failed to create startup shortcut: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     if !stdout.contains("OK") {
         anyhow::bail!("Startup shortcut creation did not confirm success");
     }
+    Ok(())
+}
 
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let start_output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "RemoteSigned",
-            "-WindowStyle",
-            "Hidden",
-            "-File",
-            &ps1_path.to_string_lossy(),
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+pub(super) fn uninstall_windows_hotkey_listener() -> Result<()> {
+    stop_windows_hotkey_listeners();
+    let _ = std::fs::remove_file(startup_shortcut_path());
+    if let Ok(vbs) = hotkey_vbs_path() {
+        let _ = std::fs::remove_file(vbs);
+    }
+    if let Ok(ps1) = legacy_hotkey_ps1_path() {
+        let _ = std::fs::remove_file(ps1);
+    }
 
+    let mut state = SetupHintsState::load();
+    state.hotkey_configured = false;
+    state.hotkey_dismissed = true;
+    let _ = state.save();
+    eprintln!("  \x1b[32m✓\x1b[0m Removed jcode Windows launch-hotkey listener");
+    Ok(())
+}
+
+fn create_hotkey_shortcut(_use_alacritty: bool) -> Result<()> {
+    let config = effective_windows_launch_hotkeys_config();
+    if config.enabled == Some(false) {
+        uninstall_windows_hotkey_listener()?;
+        anyhow::bail!("[launch_hotkeys].enabled is false; removed Windows hotkey listener");
+    }
+
+    let entries = resolve_windows_hotkeys();
+    if !entries
+        .iter()
+        .any(|entry| windows_hotkeys::hotkey_to_win32(entry).is_some())
+    {
+        anyhow::bail!("no registerable launch hotkeys in config");
+    }
+
+    let exe = std::env::current_exe()?;
+    let exe_path = exe.to_string_lossy();
+    let hotkey_dir = storage::jcode_dir()?.join("hotkey");
+    std::fs::create_dir_all(&hotkey_dir)?;
+    stop_windows_hotkey_listeners();
+
+    // Upgrade cleanup: older builds generated a PowerShell listener. The new
+    // first-party lifecycle runs the Rust binary directly and removes the stale
+    // script so future upgrades cannot accidentally resurrect it.
+    let _ = std::fs::remove_file(legacy_hotkey_ps1_path()?);
+
+    let vbs_path = hotkey_vbs_path()?;
+    let vbs_content = format!(
+        r#"Set objShell = CreateObject("WScript.Shell")
+objShell.Run """{}"" setup-hotkey --listen-windows-hotkey", 0, False
+"#,
+        exe_path
+    );
+    std::fs::write(&vbs_path, &vbs_content)?;
+    create_startup_shortcut(&vbs_path)?;
+
+    let start_output = std::process::Command::new("wscript.exe")
+        .arg(&vbs_path)
+        .output();
     if let Err(e) = start_output {
         eprintln!(
             "  \x1b[33m⚠\x1b[0m  Could not start hotkey listener now: {}",
@@ -246,9 +281,147 @@ Write-Output "OK"
     Ok(())
 }
 
+fn launch_windows_hotkey(entry: &WindowsHotkey) -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let last_dir = super::mac_hotkey_last_dir_file()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let last_repo = super::mac_hotkey_last_repo_file()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let cwd = crate::launch_hotkeys::resolve_target_dir(&entry.dir, &last_dir, &last_repo);
+    let mut args = Vec::new();
+    if entry.self_dev {
+        args.push("self-dev".to_string());
+    }
+    let command = jcode_terminal_launch::TerminalCommand::new(exe, args)
+        .title("jcode")
+        .fresh_spawn()
+        .kind("launch-hotkey");
+
+    let launched =
+        jcode_terminal_launch::spawn_command_in_new_terminal_with(&command, &cwd, |cmd| {
+            cmd.spawn().map(|_| ())
+        })?;
+    if !launched {
+        anyhow::bail!("no terminal found to launch jcode");
+    }
+    Ok(())
+}
+
+pub(super) fn run_windows_hotkey_listener() -> Result<()> {
+    let entries: Vec<WindowsHotkey> = resolve_windows_hotkeys()
+        .into_iter()
+        .filter(|entry| windows_hotkeys::hotkey_to_win32(entry).is_some())
+        .collect();
+    if entries.is_empty() {
+        return Ok(());
+    }
+    windows_native_hotkey_loop(entries)
+}
+
+#[cfg(windows)]
+fn wide_null(text: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(text)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(windows)]
+fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+
+    const MUTEX_NAME: &str = "Local\\JcodeLaunchHotkeyListener";
+
+    let mutex_name = wide_null(MUTEX_NAME);
+    let mutex = unsafe { CreateMutexW(std::ptr::null_mut(), 1, mutex_name.as_ptr()) };
+    if mutex.is_null() {
+        return Err(std::io::Error::last_os_error()).context("failed to create hotkey mutex");
+    }
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            CloseHandle(mutex);
+        }
+        return Ok(());
+    }
+
+    let mut registered: Vec<(i32, WindowsHotkey)> = Vec::new();
+    for (index, entry) in entries.into_iter().enumerate() {
+        let Some((mods, vk)) = windows_hotkeys::hotkey_to_win32(&entry) else {
+            continue;
+        };
+        let id = 0x4A00_i32 + index as i32;
+        let ok = unsafe { RegisterHotKey(std::ptr::null_mut(), id, mods | MOD_NOREPEAT, vk) } != 0;
+        if ok {
+            registered.push((id, entry));
+        } else {
+            jcode_logging::warn(&format!(
+                "failed to register Windows launch hotkey {}",
+                windows_hotkeys::display_windows_hotkey(&entry)
+            ));
+        }
+    }
+
+    if registered.is_empty() {
+        unsafe {
+            CloseHandle(mutex);
+        }
+        anyhow::bail!("no Windows launch hotkeys could be registered");
+    }
+
+    let result = (|| -> Result<()> {
+        let mut msg: MSG = unsafe { std::mem::zeroed() };
+        loop {
+            let rc = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), WM_HOTKEY, WM_HOTKEY) };
+            if rc == 0 {
+                break;
+            }
+            if rc < 0 {
+                return Err(std::io::Error::last_os_error()).context("GetMessageW failed");
+            }
+            if msg.message != WM_HOTKEY {
+                continue;
+            }
+            let id = msg.wParam as i32;
+            if let Some((_, entry)) = registered
+                .iter()
+                .find(|(registered_id, _)| *registered_id == id)
+                && let Err(err) = launch_windows_hotkey(entry)
+            {
+                jcode_logging::warn(&format!(
+                    "failed to launch jcode from Windows hotkey: {err}"
+                ));
+            }
+        }
+        Ok(())
+    })();
+
+    for (id, _) in &registered {
+        unsafe {
+            UnregisterHotKey(std::ptr::null_mut(), *id);
+        }
+    }
+    unsafe {
+        CloseHandle(mutex);
+    }
+    result
+}
+
+#[cfg(not(windows))]
+fn windows_native_hotkey_loop(_entries: Vec<WindowsHotkey>) -> Result<()> {
+    Ok(())
+}
+
 /// Build the TUI startup notice for the Windows launch hotkeys (or `None` when
-/// there is nothing to show). Mirrors the macOS/Linux notices with Alt-style
-/// chords. Only shown once the listener is configured, since Windows needs the
+/// there is nothing to show). Mirrors the macOS/Linux notices with Windows-native
+/// display labels. Only shown once the listener is configured, since Windows needs the
 /// interactive `jcode setup-hotkey` flow to install it.
 pub(super) fn windows_launch_hotkeys_notice(state: &SetupHintsState) -> Option<StartupHints> {
     if !state.hotkey_configured {
@@ -268,12 +441,12 @@ pub(super) fn windows_launch_hotkeys_notice(state: &SetupHintsState) -> Option<S
 
     let rows: Vec<super::LaunchHotkeyRow> = resolve_windows_hotkeys()
         .into_iter()
-        .filter(|hk| windows_hotkeys::chord_to_win32(&hk.chord).is_some())
+        .filter(|hk| windows_hotkeys::hotkey_to_win32(hk).is_some())
         .map(|hk| {
             let cwd = crate::launch_hotkeys::resolve_target_dir(&hk.dir, &last_dir, &last_repo);
             super::LaunchHotkeyRow {
                 chord: hk.chord.canonical(),
-                display: windows_hotkeys::display_windows(&hk.chord),
+                display: windows_hotkeys::display_windows_hotkey(&hk),
                 label: hk.label.clone(),
                 cwd_display: cwd.display().to_string(),
                 self_dev: hk.self_dev,
@@ -348,7 +521,7 @@ fn nudge_hotkey(state: &mut SetupHintsState) -> bool {
 
     eprintln!("\x1b[36m┌─────────────────────────────────────────────────────────────┐\x1b[0m");
     eprintln!(
-        "\x1b[36m│\x1b[0m \x1b[1m💡 Set up Alt+; to launch jcode from anywhere?\x1b[0m              \x1b[36m│\x1b[0m"
+        "\x1b[36m│\x1b[0m \x1b[1m💡 Set up the Copilot key to launch jcode?\x1b[0m                   \x1b[36m│\x1b[0m"
     );
     eprintln!(
         "\x1b[36m│\x1b[0m                                                             \x1b[36m│\x1b[0m"
@@ -381,7 +554,7 @@ fn nudge_hotkey(state: &mut SetupHintsState) -> bool {
                     state.launch_hotkey_tracking_version = super::LAUNCH_HOTKEY_TRACKING_VERSION;
                     let _ = state.save();
                     eprintln!(
-                        "  \x1b[32m✓\x1b[0m Created hotkey (\x1b[1mAlt+;\x1b[0m) → {} + jcode",
+                        "  \x1b[32m✓\x1b[0m Created hotkey (\x1b[1mWin+Shift+F23\x1b[0m) → {} + jcode",
                         terminal_name
                     );
                     eprintln!();
@@ -464,7 +637,7 @@ fn nudge_alacritty(state: &mut SetupHintsState) -> bool {
                         match create_hotkey_shortcut(true) {
                             Ok(()) => {
                                 eprintln!(
-                                    "  \x1b[32m✓\x1b[0m Hotkey updated: \x1b[1mAlt+;\x1b[0m → Alacritty + jcode"
+                                    "  \x1b[32m✓\x1b[0m Hotkey updated: \x1b[1mWin+Shift+F23\x1b[0m → Alacritty + jcode"
                                 );
                             }
                             Err(e) => {
@@ -501,10 +674,10 @@ fn prompt_try_it_out(installed_alacritty: bool) {
         "\x1b[32m│\x1b[0m                                                             \x1b[32m│\x1b[0m"
     );
     eprintln!(
-        "\x1b[32m│\x1b[0m    Press \x1b[1mAlt+;\x1b[0m from anywhere to launch jcode.                \x1b[32m│\x1b[0m"
+        "\x1b[32m│\x1b[0m    Press \x1b[1mWin+Shift+F23\x1b[0m, or the Copilot key, to launch.     \x1b[32m│\x1b[0m"
     );
     eprintln!(
-        "\x1b[32m│\x1b[0m    Inside jcode, \x1b[1mAlt+Shift+;\x1b[0m opens a new session here.      \x1b[32m│\x1b[0m"
+        "\x1b[32m│\x1b[0m    The listener is native Jcode, no AutoHotkey required.          \x1b[32m│\x1b[0m"
     );
     if installed_alacritty {
         eprintln!(
@@ -521,6 +694,52 @@ fn prompt_try_it_out(installed_alacritty: bool) {
     eprintln!();
 
     std::thread::sleep(std::time::Duration::from_secs(3));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_windows_hotkey_is_the_copilot_key() {
+        let entries = default_windows_launch_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].chord, "win+shift+f23");
+        assert_eq!(entries[0].dir, "$HOME");
+        assert_eq!(entries[0].label, "home");
+    }
+
+    #[test]
+    fn startup_lifecycle_paths_are_stable_for_upgrade_and_uninstall_cleanup() {
+        assert_eq!(
+            startup_shortcut_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            "jcode-hotkey.lnk"
+        );
+        assert_eq!(
+            hotkey_vbs_path()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            "jcode-hotkey-launcher.vbs"
+        );
+        assert_eq!(
+            legacy_hotkey_ps1_path()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            "jcode-hotkey.ps1"
+        );
+    }
+
+    #[test]
+    fn powershell_single_quote_escapes_embedded_quotes() {
+        assert_eq!(ps_single_quote(r"C:\O'Hara\jcode"), r"'C:\O''Hara\jcode'");
+    }
 }
 
 pub(super) fn maybe_show_windows_setup_hints(
@@ -646,11 +865,11 @@ pub(super) fn run_setup_hotkey_windows() -> Result<()> {
             eprintln!();
             eprintln!("  Press these anywhere, system-wide:");
             for hk in resolve_windows_hotkeys() {
-                if windows_hotkeys::chord_to_win32(&hk.chord).is_some() {
+                if windows_hotkeys::hotkey_to_win32(&hk).is_some() {
                     let suffix = if hk.self_dev { " [self-dev]" } else { "" };
                     eprintln!(
                         "    \x1b[1m{}\x1b[0m → {}{}",
-                        windows_hotkeys::display_windows(&hk.chord),
+                        windows_hotkeys::display_windows_hotkey(&hk),
                         hk.label,
                         suffix
                     );

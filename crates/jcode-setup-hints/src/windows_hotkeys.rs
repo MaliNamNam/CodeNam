@@ -1,25 +1,23 @@
 //! Config-driven global launch hotkeys on Windows.
 //!
-//! Windows registers global hotkeys through the Win32 `RegisterHotKey` API. We
-//! keep the existing delivery mechanism (a hidden PowerShell listener started
-//! at login) but generate it from the shared `[launch_hotkeys]` config instead
-//! of hard-coding a single Alt+; binding, so per-repo hotkeys work on Windows
-//! the same way they do on macOS and Linux.
+//! Windows registers global hotkeys through the Win32 `RegisterHotKey` API. The
+//! long-lived listener is now first-party Rust (`jcode setup-hotkey
+//! --listen-windows-hotkey`); this pure module keeps chord-to-Win32 mapping and
+//! legacy script rendering testable without touching the machine.
 //!
 //! This module is the **pure** layer, mirroring `linux_niri`/`linux_env`:
 //!
-//! * [`chord_to_win32`] maps a jcode [`KeyChord`] onto `RegisterHotKey`
-//!   modifier flags plus a virtual-key code. jcode's `cmd` modifier maps to
-//!   **Alt** on Windows (matching the historical Alt+; hotkey): most Win+ key
-//!   combos are reserved by the OS (Win+; opens the emoji panel), so mapping
-//!   cmd -> Win would produce hotkeys that never fire.
+//! * [`hotkey_to_win32`] maps a resolved [`WindowsHotkey`] onto `RegisterHotKey`
+//!   modifier flags plus a virtual-key code. Explicit `win+...` chords use the
+//!   native Windows logo modifier, while legacy `cmd+...` config keeps mapping to
+//!   **Alt** so existing Alt+; installs continue to work.
 //! * [`render_windows_listener_ps1`] renders the entire listener script from
 //!   the resolved entries. Dynamic targets (`$LAST_DIR`/`$LAST_REPO`) are read
 //!   from their files at keypress time, so "last project" tracks new launches
 //!   without restarting the listener.
 //!
-//! The install glue (writing the script, startup shortcut, process restart)
-//! stays in `windows_setup.rs`.
+//! The install glue (startup shortcut, single-instance listener lifecycle,
+//! upgrade/uninstall cleanup) stays in `windows_setup.rs`.
 
 use crate::keymap::KeyChord;
 
@@ -27,11 +25,17 @@ use crate::keymap::KeyChord;
 const MOD_ALT: u32 = 0x0001;
 const MOD_CONTROL: u32 = 0x0002;
 const MOD_SHIFT: u32 = 0x0004;
+const MOD_WIN: u32 = 0x0008;
 
 /// One launch hotkey resolved for the Windows listener.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowsHotkey {
     pub chord: KeyChord,
+    /// Whether the `cmd`/super bit came from an explicit Windows-logo-key token
+    /// (`win+`, `windows+`, or `super+`). `KeyChord` normalizes those aliases to
+    /// `cmd`, so Windows keeps this side-channel to preserve native Win-key
+    /// semantics without breaking older `cmd+;` configs that meant Alt+;.
+    pub win_modifier: bool,
     /// Configured directory target: an absolute path or one of the sentinels
     /// `$HOME`, `$LAST_DIR`, `$LAST_REPO` (resolved at keypress time).
     pub dir: String,
@@ -40,14 +44,38 @@ pub(crate) struct WindowsHotkey {
     pub self_dev: bool,
 }
 
+/// Detect whether a raw config chord explicitly requested the Windows logo key.
+pub(crate) fn raw_chord_uses_win_modifier(raw: &str) -> bool {
+    raw.split('+').map(str::trim).any(|part| {
+        matches!(
+            part.to_ascii_lowercase().as_str(),
+            "win" | "windows" | "super"
+        )
+    })
+}
+
 /// Map a chord onto `(modifier_flags, virtual_key_code)` for `RegisterHotKey`.
 /// Returns `None` for keys with no stable VK code. jcode `cmd` maps to Alt
 /// (see module docs); a chord that is *both* cmd and alt still collapses onto
 /// a single MOD_ALT, which is the closest expressible binding.
 pub(crate) fn chord_to_win32(chord: &KeyChord) -> Option<(u32, u32)> {
+    chord_to_win32_with_super(chord, false)
+}
+
+/// Map a full Windows hotkey onto `(modifier_flags, virtual_key_code)`.
+pub(crate) fn hotkey_to_win32(hotkey: &WindowsHotkey) -> Option<(u32, u32)> {
+    chord_to_win32_with_super(&hotkey.chord, hotkey.win_modifier)
+}
+
+fn chord_to_win32_with_super(chord: &KeyChord, super_as_win: bool) -> Option<(u32, u32)> {
     let vk = key_to_vk(&chord.key)?;
     let mut mods = 0u32;
-    if chord.cmd || chord.alt {
+    if chord.cmd && super_as_win {
+        mods |= MOD_WIN;
+    } else if chord.cmd {
+        mods |= MOD_ALT;
+    }
+    if chord.alt {
         mods |= MOD_ALT;
     }
     if chord.ctrl {
@@ -122,6 +150,34 @@ pub(crate) fn display_windows(chord: &KeyChord) -> String {
     mapped.display()
 }
 
+/// User-facing chord rendering for a Windows hotkey, preserving explicit Win-key
+/// chords instead of showing the normalized internal `Cmd` alias.
+pub(crate) fn display_windows_hotkey(hotkey: &WindowsHotkey) -> String {
+    if !hotkey.win_modifier {
+        return display_windows(&hotkey.chord);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if hotkey.chord.cmd {
+        parts.push("Win".to_string());
+    }
+    if hotkey.chord.ctrl {
+        parts.push("Ctrl".to_string());
+    }
+    if hotkey.chord.alt {
+        parts.push("Alt".to_string());
+    }
+    if hotkey.chord.shift {
+        parts.push("Shift".to_string());
+    }
+    let mut key_only = hotkey.chord.clone();
+    key_only.cmd = false;
+    key_only.ctrl = false;
+    key_only.alt = false;
+    key_only.shift = false;
+    parts.push(key_only.display());
+    parts.join("+")
+}
+
 /// Escape a string for a single-quoted PowerShell literal.
 fn ps_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "''"))
@@ -156,13 +212,13 @@ pub(crate) fn render_windows_listener_ps1(
     let mut dispatch = String::new();
     let mut count = 0usize;
     for (index, entry) in entries.iter().enumerate() {
-        let Some((mods, vk)) = chord_to_win32(&entry.chord) else {
+        let Some((mods, vk)) = hotkey_to_win32(entry) else {
             continue;
         };
         count += 1;
         // Ids only need to be process-unique; derive from the entry index.
         let id = 0x4A00 + index; // "J" namespace
-        let label = display_windows(&entry.chord);
+        let label = display_windows_hotkey(entry);
         registrations.push_str(&format!(
             "Register-JcodeHotkey -Id 0x{id:X} -Mods 0x{mods:X} -Vk 0x{vk:X} -Label {label}\n",
             label = ps_quote(&format!("{label} ({})", entry.label)),
@@ -276,6 +332,7 @@ mod tests {
     fn hk(chord_str: &str, dir: &str, label: &str, self_dev: bool) -> WindowsHotkey {
         WindowsHotkey {
             chord: chord(chord_str),
+            win_modifier: raw_chord_uses_win_modifier(chord_str),
             dir: dir.to_string(),
             label: label.to_string(),
             self_dev,
@@ -309,6 +366,16 @@ mod tests {
     }
 
     #[test]
+    fn explicit_win_shift_f23_maps_to_native_copilot_hotkey() {
+        let hotkey = hk("win+shift+f23", "$HOME", "copilot", false);
+        assert_eq!(
+            hotkey_to_win32(&hotkey).unwrap(),
+            (MOD_WIN | MOD_SHIFT, 0x86)
+        );
+        assert_eq!(display_windows_hotkey(&hotkey), "Win+Shift+F23");
+    }
+
+    #[test]
     fn rejects_unmodified_and_unmappable_chords() {
         // A bare key must never become a global hotkey.
         assert!(chord_to_win32(&chord("k")).is_none());
@@ -320,12 +387,14 @@ mod tests {
         assert_eq!(display_windows(&chord("cmd+;")), "Alt+;");
         assert_eq!(display_windows(&chord("cmd+shift+'")), "Alt+Shift+'");
         assert_eq!(display_windows(&chord("ctrl+k")), "Ctrl+K");
+        assert!(raw_chord_uses_win_modifier("windows + shift + f23"));
+        assert!(!raw_chord_uses_win_modifier("cmd+shift+f23"));
     }
 
     #[test]
     fn listener_script_registers_each_entry_and_dispatches_dirs() {
         let entries = vec![
-            hk("cmd+;", "C:\\Users\\u\\jcode", "jcode", false),
+            hk("win+shift+f23", "C:\\Users\\u\\jcode", "jcode", false),
             hk("cmd+'", "$HOME", "home", false),
             hk("cmd+shift+'", "$LAST_REPO", "self-dev", true),
         ];
@@ -345,6 +414,7 @@ mod tests {
         assert!(script.contains("-Id 0x4A02"));
 
         // Fixed dir, home fallback, and dynamic repo file all present.
+        assert!(script.contains("Win+Shift+F23"));
         assert!(script.contains("Resolve-JcodeFixedDir 'C:\\Users\\u\\jcode'"));
         assert!(script.contains("Resolve-JcodeDir $null"));
         assert!(script.contains("Resolve-JcodeDir 'C:\\Users\\u\\.jcode\\hotkey\\last_repo'"));

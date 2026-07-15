@@ -1,6 +1,6 @@
 //! Platform setup hints shown on startup.
 //!
-//! - Windows: suggest Alt+; hotkey setup and Alacritty install.
+//! - Windows: suggest native Win+Shift+F23/Copilot-key hotkey setup and terminal setup.
 //! - macOS: if the user is on the default built-in Terminal.app, show a one-time
 //!   notice that it renders jcode poorly and suggest a modern terminal (Ghostty).
 //! - Linux: create a .desktop launcher file.
@@ -57,6 +57,7 @@ use macos_terminal::{
 #[cfg(windows)]
 use windows_setup::{
     create_windows_desktop_shortcut, maybe_show_windows_setup_hints, run_setup_hotkey_windows,
+    run_windows_hotkey_listener, uninstall_windows_hotkey_listener,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -655,12 +656,16 @@ fn nudge_macos_ghostty(state: &mut SetupHintsState) -> Option<StartupHints> {
         reason = "explicit return ends a cfg-gated block"
     )
 )]
-pub fn run_setup_hotkey(_listen_macos_hotkey: bool, notify_cli_launch: Option<&str>) -> Result<()> {
+pub fn run_setup_hotkey(
+    _listen_macos_hotkey: bool,
+    _listen_windows_hotkey: bool,
+    _uninstall: bool,
+    notify_cli_launch: Option<&str>,
+) -> Result<()> {
     if let Some(source) = notify_cli_launch {
         cli_launch_hints::maybe_notify(source)?;
         return Ok(());
     }
-
     #[cfg(target_os = "macos")]
     {
         // The background listener (`--listen-macos-hotkey`) is intercepted earlier,
@@ -778,6 +783,12 @@ pub fn run_setup_hotkey(_listen_macos_hotkey: bool, notify_cli_launch: Option<&s
 
     #[cfg(windows)]
     {
+        if _listen_windows_hotkey {
+            return run_windows_hotkey_listener();
+        }
+        if _uninstall {
+            return uninstall_windows_hotkey_listener();
+        }
         run_setup_hotkey_windows()
     }
 }
