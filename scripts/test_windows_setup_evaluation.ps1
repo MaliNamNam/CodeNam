@@ -19,6 +19,7 @@ $envNames = @(
     'JCODE_INSTALL_PS1_IMPORT_ONLY',
     'JCODE_UNINSTALL_PS1_IMPORT_ONLY',
     'JCODE_SKIP_SERVER_RELOAD',
+    'JCODE_INSTALL_SKIP_BINARY_VALIDATION',
     'JCODE_DISABLE_ENV_BROADCAST',
     'JCODE_WINDOWS_SETUP_SKIP_EXTERNALS'
 )
@@ -146,6 +147,7 @@ New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 try {
     $env:JCODE_INSTALL_PS1_IMPORT_ONLY = '1'
     $env:JCODE_SKIP_SERVER_RELOAD = '1'
+    $env:JCODE_INSTALL_SKIP_BINARY_VALIDATION = '1'
     . $installScript -SkipAlacrittySetup -SkipHotkeySetup
 
     Invoke-Case 'path_persistence_and_deduplication' {

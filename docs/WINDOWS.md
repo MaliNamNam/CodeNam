@@ -41,6 +41,18 @@ $script = [scriptblock]::Create((irm https://raw.githubusercontent.com/1jehuang/
 
 Jcode can also offer these options interactively after launch.
 
+If a release does not contain a matching prebuilt Windows asset, the installer
+fails with an actionable message rather than silently starting a long build.
+To explicitly allow a source build:
+
+```powershell
+$script = [scriptblock]::Create((irm https://raw.githubusercontent.com/1jehuang/jcode/master/scripts/install.ps1))
+& $script -BuildFromSource
+```
+
+Source builds require Git, Rust, and Visual Studio 2022 Build Tools with the
+**Desktop development with C++** workload.
+
 ### Install paths
 
 - Launcher: `%LOCALAPPDATA%\jcode\bin\jcode.exe`

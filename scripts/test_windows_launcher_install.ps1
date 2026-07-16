@@ -69,6 +69,32 @@ try {
     Assert-Equal 1 $script:broadcastCalls 'environment broadcast should not be called when PATH is unchanged'
     Assert-Equal $false $noChangeUpdate.Broadcasted 'unchanged path update should not report broadcast'
 
+    Write-Host 'test_local_binary_version_output_parsing'
+    Assert-Equal 'v0.47.0' (ConvertFrom-JcodeVersionOutput 'jcode v0.47.0 (f7f5898c)') 'local artifact version parser should accept normal jcode --version output'
+    Assert-Equal $null (ConvertFrom-JcodeVersionOutput 'not a jcode binary') 'local artifact version parser should reject unrelated output'
+
+    Write-Host 'test_release_checksum_validation'
+    $checksumFile = Join-Path $testRoot 'checksum.bin'
+    Set-Content -LiteralPath $checksumFile -Value 'known-content' -NoNewline
+    $digest = (Get-FileHash -LiteralPath $checksumFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifest = "$digest  nested/path/jcode-windows-x86_64.exe"
+    Assert-Equal $digest (Get-JcodeSha256FromManifest -ManifestText $manifest -AssetName 'jcode-windows-x86_64.exe') 'checksum parser should match release assets by file name'
+    Assert-Equal $digest (Assert-JcodeFileChecksum -FilePath $checksumFile -ManifestText $manifest -AssetName 'jcode-windows-x86_64.exe') 'checksum validation should accept the matching digest'
+    $checksumThrew = $false
+    try {
+        Assert-JcodeFileChecksum -FilePath $checksumFile -ManifestText (('0' * 64) + '  jcode-windows-x86_64.exe') -AssetName 'jcode-windows-x86_64.exe' | Out-Null
+    } catch {
+        $checksumThrew = $true
+    }
+    Assert-Equal $true $checksumThrew 'checksum validation should reject a mismatched digest'
+
+    Write-Host 'test_optional_setup_and_source_build_are_opt_in'
+    Assert-Equal $false ([bool]$ConfigureAlacritty) 'core install should not install an optional terminal by default'
+    Assert-Equal $false ([bool]$ConfigureHotkey) 'core install should not add login persistence by default'
+    Assert-Equal $false ([bool]$BuildFromSource) 'installer should not start a source build by default'
+    $installText = Get-Content -LiteralPath $installScript -Raw
+    Assert-True ($installText.Contains('will not start a long source build automatically')) 'missing release assets should produce an explicit source-build opt-in message'
+
     Write-Host 'test_upgrade_replaces_launcher_no_extra_path'
     $sourceDir = Join-Path $testRoot 'sources'
     New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null

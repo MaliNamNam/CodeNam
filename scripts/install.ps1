@@ -17,19 +17,24 @@
     Use a local jcode.exe artifact instead of downloading from GitHub.
 .PARAMETER ArtifactTgzPath
     Use a local jcode .tar.gz artifact instead of downloading from GitHub.
+.PARAMETER BuildFromSource
+    If no prebuilt release asset is available, explicitly allow a source build.
+    Source builds require Git, Rust, and the Visual Studio C++ Build Tools.
 .PARAMETER ConfigureAlacritty
     Install Alacritty through winget when it is not already available.
 .PARAMETER ConfigureHotkey
-    Configure the optional global launch hotkey. This requires Alacritty.
+    Configure the optional global launch hotkey.
 .PARAMETER SkipAlacrittySetup
     Deprecated compatibility switch. Alacritty setup is opt-in by default.
 .PARAMETER SkipHotkeySetup
-    Deprecated compatibility switch. Hotkey setup is opt-in by default.#>
+    Deprecated compatibility switch. Hotkey setup is opt-in by default.
+#>
 param(
     [string]$InstallDir,
     [string]$Version,
     [string]$ArtifactExePath,
     [string]$ArtifactTgzPath,
+    [switch]$BuildFromSource,
     [switch]$ConfigureAlacritty,
     [switch]$ConfigureHotkey,
     [switch]$SkipAlacrittySetup,
@@ -539,6 +544,162 @@ function Stop-JcodeHotkeyListeners {
     } catch {}
 }
 
+function ConvertFrom-JcodeVersionOutput([string]$Output) {
+    if (-not $Output) {
+        return $null
+    }
+
+    if ($Output -match '(?im)^jcode\s+v?([0-9][0-9A-Za-z.+-]*)') {
+        return "v$($Matches[1])"
+    }
+
+    return $null
+}
+
+function Get-JcodeVersionFromBinary([string]$BinaryPath) {
+    if (-not $BinaryPath -or -not (Test-Path -LiteralPath $BinaryPath)) {
+        return $null
+    }
+
+    try {
+        $output = (& $BinaryPath --version 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+        return (ConvertFrom-JcodeVersionOutput $output)
+    } catch {
+        return $null
+    }
+}
+
+function Get-JcodeSha256FromManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$ManifestText,
+        [Parameter(Mandatory = $true)][string]$AssetName
+    )
+
+    foreach ($line in ($ManifestText -split "`r?`n")) {
+        if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(.+?)\s*$') {
+            $candidateName = [System.IO.Path]::GetFileName($Matches[2])
+            if ($candidateName -eq $AssetName) {
+                return $Matches[1].ToLowerInvariant()
+            }
+        }
+    }
+
+    return $null
+}
+
+function Assert-JcodeFileChecksum {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$ManifestText,
+        [Parameter(Mandatory = $true)][string]$AssetName
+    )
+
+    $expected = Get-JcodeSha256FromManifest -ManifestText $ManifestText -AssetName $AssetName
+    if (-not $expected) {
+        throw "SHA256SUMS does not contain an entry for $AssetName"
+    }
+
+    $actual = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "SHA256 mismatch for $AssetName (expected $expected, got $actual)"
+    }
+
+    return $actual
+}
+
+function Confirm-JcodeDownloadedAsset {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$AssetName,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+
+    $checksumUrl = "https://github.com/$Repo/releases/download/$Version/SHA256SUMS"
+    try {
+        $manifest = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content
+    } catch {
+        Write-Warn "SHA256SUMS is not available yet; continuing with HTTPS download validation only"
+        return $false
+    }
+
+    try {
+        Assert-JcodeFileChecksum -FilePath $FilePath -ManifestText $manifest -AssetName $AssetName | Out-Null
+    } catch {
+        Write-Err $_.Exception.Message
+    }
+
+    Write-Info "Verified SHA256 checksum for $AssetName"
+    return $true
+}
+
+function Assert-JcodeBinaryCandidate {
+    param(
+        [Parameter(Mandatory = $true)][string]$BinaryPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion
+    )
+
+    if ($env:JCODE_INSTALL_SKIP_BINARY_VALIDATION -eq "1") {
+        return $null
+    }
+
+    $reportedVersion = Get-JcodeVersionFromBinary $BinaryPath
+    if (-not $reportedVersion) {
+        Write-Err "Downloaded jcode binary could not run '--version'. It may be corrupt, quarantined by antivirus, or built for the wrong architecture."
+    }
+
+    $expectedNumber = $ExpectedVersion.TrimStart('v')
+    if ($reportedVersion.TrimStart('v') -ne $expectedNumber) {
+        Write-Err "Downloaded binary reports $reportedVersion, but the installer requested $ExpectedVersion"
+    }
+
+    Write-Info "Validated jcode binary: $reportedVersion"
+    return $reportedVersion
+}
+
+function Test-JcodeMsvcBuildToolsAvailable {
+    if (Get-Command link.exe -ErrorAction SilentlyContinue) {
+        return $true
+    }
+
+    $programFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    if (-not $programFilesX86) {
+        return $false
+    }
+
+    $vswhere = Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path -LiteralPath $vswhere)) {
+        return $false
+    }
+
+    try {
+        $linkPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\link.exe' 2>$null | Select-Object -First 1
+        return [bool]$linkPath
+    } catch {
+        return $false
+    }
+}
+
+function Assert-JcodeSourceBuildPrerequisites {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Err "Git is required for -BuildFromSource. Install it with: winget install -e --id Git.Git"
+    }
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue) -or -not (Get-Command rustc -ErrorAction SilentlyContinue)) {
+        Write-Err "Rust is required for -BuildFromSource. Install it from https://rustup.rs, then open a new PowerShell window."
+    }
+
+    $rustHost = ""
+    try {
+        $rustHost = (& rustc -vV 2>$null | Select-String '^host:' | Select-Object -First 1).ToString()
+    } catch {}
+
+    if ($rustHost -match 'pc-windows-msvc' -and -not (Test-JcodeMsvcBuildToolsAvailable)) {
+        Write-Err "The MSVC linker (link.exe) was not found. Install Visual Studio 2022 Build Tools with the 'Desktop development with C++' workload, then open a new PowerShell window before using -BuildFromSource."
+    }
+}
+
 function Set-SetupHintsState([bool]$AlacrittyConfigured, [bool]$HotkeyConfigured) {
     New-Item -ItemType Directory -Path $JcodeHome -Force | Out-Null
 
@@ -665,16 +826,22 @@ if ($ResolvedArtifactExePath -and $ResolvedArtifactTgzPath) {
 }
 
 if (-not $Version) {
-    if ($ResolvedArtifactExePath -or $ResolvedArtifactTgzPath) {
-        Write-Err "-Version is required when using a local artifact path"
-    }
-
-    Write-Info "Fetching latest release..."
-    try {
-        $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-        $Version = $Release.tag_name
-    } catch {
-        Write-Err "Failed to determine latest version: $_"
+    if ($ResolvedArtifactExePath) {
+        $Version = Get-JcodeVersionFromBinary $ResolvedArtifactExePath
+        if (-not $Version) {
+            Write-Err "Could not detect a jcode version from '$ResolvedArtifactExePath'. Pass -Version explicitly if this is a trusted local build."
+        }
+        Write-Info "Detected local artifact version: $Version"
+    } elseif ($ResolvedArtifactTgzPath) {
+        Write-Err "-Version is required when using -ArtifactTgzPath"
+    } else {
+        Write-Info "Fetching latest release..."
+        try {
+            $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+            $Version = $Release.tag_name
+        } catch {
+            Write-Err "Failed to determine latest version: $_"
+        }
     }
 }
 
@@ -712,8 +879,10 @@ foreach ($d in @($InstallDir, $StableDir, $VersionDir)) {
 $TempDir = Join-Path $env:TEMP "jcode-install-$(Get-Random)"
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
+try {
 $DownloadMode = ""
 $DownloadPath = Join-Path $TempDir "jcode.download"
+$DownloadedAssetName = $null
 
 if ($ResolvedArtifactExePath) {
     Write-Info "Using local artifact exe: $ResolvedArtifactExePath"
@@ -728,11 +897,13 @@ if ($ResolvedArtifactExePath) {
         Write-Info "Downloading $Artifact.exe..."
         Invoke-WebRequest -UseBasicParsing -Uri $ExeUrl -OutFile $DownloadPath
         $DownloadMode = "bin"
+        $DownloadedAssetName = "$Artifact.exe"
     } catch {
         try {
             Write-Info "Trying archive download..."
             Invoke-WebRequest -UseBasicParsing -Uri $TgzUrl -OutFile $DownloadPath
             $DownloadMode = "tar"
+            $DownloadedAssetName = "$Artifact.tar.gz"
         } catch {
             $DownloadMode = ""
         }
@@ -758,9 +929,13 @@ if ($DownloadMode -eq "tar") {
 } elseif ($DownloadMode -eq "bin") {
     Move-Item -Path $DownloadPath -Destination $DestBin -Force
 } else {
-    Write-Info "No prebuilt asset found for $Artifact in $Version; building from source..."
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Write-Err "git is required to build from source" }
-    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Err "cargo is required to build from source" }
+    if (-not $BuildFromSource) {
+        $releaseUrl = "https://github.com/$Repo/releases/tag/$Version"
+        Write-Err "No prebuilt $Artifact asset was found in $Version. Check $releaseUrl or rerun the downloaded script with -BuildFromSource. The installer will not start a long source build automatically."
+    }
+
+    Write-Info "No prebuilt asset found for $Artifact in $Version; -BuildFromSource was requested"
+    Assert-JcodeSourceBuildPrerequisites
 
     $SrcDir = Join-Path $TempDir "jcode-src"
     Write-Info "Cloning $Repo at $Version..."
@@ -800,10 +975,15 @@ if ($DownloadMode -eq "tar") {
     Copy-Item -Path $BuiltBin -Destination $DestBin -Force
 }
 
+Assert-JcodeBinaryCandidate -BinaryPath $DestBin -ExpectedVersion $Version | Out-Null
+
 $StableBin = Join-Path $StableDir "jcode.exe"
 Copy-Item -Path $DestBin -Destination $StableBin -Force
 Set-Content -Path (Join-Path $BuildsDir "stable-version") -Value $VersionNum
 Install-JcodeLauncher -SourcePath $StableBin -LauncherPath $LauncherPath | Out-Null
+} finally {
+    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Gracefully reload any running background server onto the freshly installed
 # binary (issue #291). `server reload` only reloads a genuinely-older daemon,
@@ -816,8 +996,6 @@ if ($env:JCODE_SKIP_SERVER_RELOAD -ne "1") {
     } catch {
     }
 }
-
-Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 
 $userPathUpdate = Set-JcodeUserPath -InstallDir $InstallDir
 if ($userPathUpdate.Changed) {
@@ -833,15 +1011,24 @@ Set-JcodeProcessPath -InstallDir $InstallDir | Out-Null
 
 $installedAlacritty = $false
 $configuredHotkey = $false
+$shouldSetupAlacritty = [bool]($ConfigureAlacritty -and -not $SkipAlacrittySetup)
+$shouldSetupHotkey = [bool]($ConfigureHotkey -and -not $SkipHotkeySetup)
 
-if ($ConfigureAlacritty -and -not $SkipAlacrittySetup) {
+if ($ConfigureAlacritty -and $SkipAlacrittySetup) {
+    Write-Warn "Both -ConfigureAlacritty and -SkipAlacrittySetup were provided; skipping Alacritty setup"
+}
+if ($ConfigureHotkey -and $SkipHotkeySetup) {
+    Write-Warn "Both -ConfigureHotkey and -SkipHotkeySetup were provided; skipping hotkey setup"
+}
+
+if ($shouldSetupAlacritty) {
     $installedAlacritty = Install-Alacritty
 } else {
     $installedAlacritty = Test-AlacrittyInstalled
     Write-Info "Optional Alacritty setup not requested"
 }
 
-if ($ConfigureHotkey -and -not $SkipHotkeySetup) {
+if ($shouldSetupHotkey) {
     $configuredHotkey = Install-JcodeHotkey -JcodeExePath $LauncherPath
 } else {
     Write-Info "Optional global hotkey setup not requested"
@@ -862,6 +1049,9 @@ if (Test-AlacrittyInstalled) {
 
 if ($configuredHotkey) {
     Write-Info "Global hotkey ready: Win+Shift+F23 (Copilot key) opens jcode"
+    Write-Host ""
+} elseif (-not $ConfigureHotkey) {
+    Write-Info "Optional: run 'jcode setup-hotkey' to configure global launch hotkeys and terminal preferences."
     Write-Host ""
 }
 
