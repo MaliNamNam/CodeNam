@@ -118,6 +118,7 @@ function New-IsolatedWindowsProfile([string]$Name) {
         BuildsDir = Join-Path $local 'jcode\builds'
         SetupHintsPath = Join-Path $jcodeHome 'setup_hints.json'
         HotkeyDir = Join-Path $jcodeHome 'hotkey'
+        StartupShortcutPath = Join-Path $appData 'Microsoft\Windows\Start Menu\Programs\Startup\jcode-hotkey.lnk'
     }
 }
 
@@ -370,9 +371,14 @@ try {
         New-Item -ItemType Directory -Path $profile.InstallDir -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $profile.BuildsDir 'stable') -Force | Out-Null
         New-Item -ItemType Directory -Path $profile.JcodeHome -Force | Out-Null
+        New-Item -ItemType Directory -Path $profile.HotkeyDir -Force | Out-Null
+        New-Item -ItemType Directory -Path (Split-Path -Parent $profile.StartupShortcutPath) -Force | Out-Null
         Set-Content -Path $profile.LauncherPath -Value 'installed launcher' -NoNewline
         Set-Content -Path (Join-Path $profile.BuildsDir 'stable\jcode.exe') -Value 'stable build' -NoNewline
         Set-Content -Path (Join-Path $profile.JcodeHome 'config.toml') -Value 'kept = true' -NoNewline
+        Set-Content -Path (Join-Path $profile.HotkeyDir 'jcode-hotkey.ps1') -Value 'legacy listener' -NoNewline
+        Set-Content -Path $profile.StartupShortcutPath -Value 'startup shortcut' -NoNewline
+        @{ hotkey_configured = $true; hotkey_dismissed = $false } | ConvertTo-Json | Set-Content -Path $profile.SetupHintsPath -Encoding UTF8
         $installVariant = ($profile.InstallDir.ToUpperInvariant() + '\')
         $script:uninstallUserPath = "$($profile.InstallDir);C:\Keep;$installVariant"
         $script:uninstallSetCalls = 0
@@ -382,7 +388,12 @@ try {
         Assert-Equal 0 $exitCode 'uninstall should complete successfully in the isolated profile'
         Assert-PathMissing $profile.LauncherPath 'uninstall should remove the launcher'
         Assert-PathMissing $profile.BuildsDir 'uninstall should remove installed build binaries'
+        Assert-PathMissing $profile.StartupShortcutPath 'uninstall should remove the launch-hotkey Startup shortcut'
+        Assert-PathMissing (Join-Path $profile.HotkeyDir 'jcode-hotkey.ps1') 'uninstall should remove legacy launch-hotkey artifacts'
         Assert-PathExists (Join-Path $profile.JcodeHome 'config.toml') 'uninstall without -Purge should keep user data'
+        $setupHints = Get-Content -LiteralPath $profile.SetupHintsPath -Raw | ConvertFrom-Json
+        Assert-Equal $false $setupHints.hotkey_configured 'uninstall should clear the persisted hotkey-configured state'
+        Assert-Equal $true $setupHints.hotkey_dismissed 'uninstall should keep the removed hotkey prompt dismissed'
         Assert-Equal 'C:\Keep' $script:uninstallUserPath 'uninstall should remove all jcode-managed PATH variants and keep unrelated entries'
         Assert-Equal 1 $script:uninstallSetCalls 'uninstall should write mocked user PATH once when cleanup changes it'
         Assert-Equal 1 $script:uninstallBroadcasts 'uninstall should broadcast once after PATH cleanup'

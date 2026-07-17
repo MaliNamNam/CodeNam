@@ -44,6 +44,51 @@ function Get-DefaultJcodeInstallDir {
     return (Join-Path (Get-JcodeLocalAppDataDir) "jcode\bin")
 }
 
+function Get-JcodeRoamingAppDataDir {
+    if ($env:APPDATA) { return $env:APPDATA }
+
+    $appData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+    if ($appData) { return $appData }
+
+    if ($env:USERPROFILE) { return (Join-Path $env:USERPROFILE "AppData\Roaming") }
+    return (Join-Path ([Environment]::GetFolderPath("UserProfile")) "AppData\Roaming")
+}
+
+function Get-JcodeStartupShortcutPath {
+    return (Join-Path (Get-JcodeRoamingAppDataDir) "Microsoft\Windows\Start Menu\Programs\Startup\jcode-hotkey.lnk")
+}
+
+function Get-JcodeHotkeyArtifactPaths([string]$UserDataDir) {
+    $hotkeyDir = Join-Path $UserDataDir "hotkey"
+    return @(
+        (Join-Path $hotkeyDir "jcode-hotkey.ps1"),
+        (Join-Path $hotkeyDir "jcode-hotkey-launcher.vbs"),
+        (Join-Path $hotkeyDir "jcode-hotkey-shortcut.ps1")
+    )
+}
+
+function Clear-JcodeHotkeySetupState([string]$UserDataDir) {
+    $setupHintsPath = Join-Path $UserDataDir "setup_hints.json"
+    if (-not (Test-Path -LiteralPath $setupHintsPath)) { return }
+
+    try {
+        $state = Get-Content -LiteralPath $setupHintsPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($property in @(
+            @{ Name = "hotkey_configured"; Value = $false },
+            @{ Name = "hotkey_dismissed"; Value = $true }
+        )) {
+            if ($state.PSObject.Properties.Name -contains $property.Name) {
+                $state.($property.Name) = $property.Value
+            } else {
+                $state | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+            }
+        }
+        $state | ConvertTo-Json | Set-Content -LiteralPath $setupHintsPath -Encoding UTF8
+    } catch {
+        Write-Warn "Could not update hotkey setup state in $setupHintsPath"
+    }
+}
+
 function ConvertTo-JcodePathKey([string]$PathValue) {
     if (-not $PathValue) { return "" }
     $clean = [Environment]::ExpandEnvironmentVariables($PathValue.Trim().Trim('"'))
@@ -184,10 +229,16 @@ $userDataDir = if ($env:JCODE_HOME) {
 } else {
     Join-Path ([Environment]::GetFolderPath("UserProfile")) ".jcode"
 }
+$startupShortcutPath = Get-JcodeStartupShortcutPath
+$hotkeyArtifactPaths = @(Get-JcodeHotkeyArtifactPaths -UserDataDir $userDataDir)
 
 $targets = @()
 if (Test-Path -LiteralPath $launcherPath) { $targets += "$launcherPath (launcher)" }
 if (Test-Path -LiteralPath $buildsDir) { $targets += "$buildsDir (installed binaries)" }
+if (Test-Path -LiteralPath $startupShortcutPath) { $targets += "$startupShortcutPath (launch-hotkey startup shortcut)" }
+foreach ($path in $hotkeyArtifactPaths) {
+    if (Test-Path -LiteralPath $path) { $targets += "$path (launch-hotkey artifact)" }
+}
 if ($Purge -and (Test-Path -LiteralPath $userDataDir)) { $targets += "$userDataDir (user data)" }
 
 $userPathPreview = Resolve-JcodePathRemoval -InstallDir $InstallDir -CurrentPath ([Environment]::GetEnvironmentVariable("Path", "User"))
@@ -223,6 +274,25 @@ try {
     Get-CimInstance Win32_Process -Filter "Name = 'jcode.exe'" -ErrorAction SilentlyContinue |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 } catch {}
+
+if (Test-Path -LiteralPath $startupShortcutPath) {
+    Remove-Item -LiteralPath $startupShortcutPath -Force
+    Write-Info "Removed $startupShortcutPath"
+}
+
+foreach ($path in $hotkeyArtifactPaths) {
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+        Write-Info "Removed $path"
+    }
+}
+if (-not $Purge) {
+    $hotkeyDir = Join-Path $userDataDir "hotkey"
+    if (Test-Path -LiteralPath $hotkeyDir) {
+        Remove-Item -LiteralPath $hotkeyDir -Force -ErrorAction SilentlyContinue
+    }
+    Clear-JcodeHotkeySetupState -UserDataDir $userDataDir
+}
 
 if (Test-Path -LiteralPath $launcherPath) {
     Remove-Item -LiteralPath $launcherPath -Force

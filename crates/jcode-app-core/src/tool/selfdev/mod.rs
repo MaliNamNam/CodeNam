@@ -219,16 +219,17 @@ impl BuildRequest {
         let mut archived = 0;
         for request in terminal.into_iter().skip(limit) {
             let path = Self::path_for_request(&request.request_id)?;
-            if let Some(file_name) = path.file_name() {
-                if path.exists() && std::fs::rename(&path, archive_dir.join(file_name)).is_ok() {
-                    archived += 1;
-                }
+            if let Some(file_name) = path.file_name()
+                && path.exists()
+                && std::fs::rename(&path, archive_dir.join(file_name)).is_ok()
+            {
+                archived += 1;
             }
             let backup = path.with_extension("bak");
-            if let Some(file_name) = backup.file_name() {
-                if backup.exists() {
-                    let _ = std::fs::rename(&backup, archive_dir.join(file_name));
-                }
+            if let Some(file_name) = backup.file_name()
+                && backup.exists()
+            {
+                let _ = std::fs::rename(&backup, archive_dir.join(file_name));
             }
         }
         Ok(archived)
