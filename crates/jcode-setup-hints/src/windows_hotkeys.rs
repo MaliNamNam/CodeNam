@@ -59,6 +59,7 @@ pub(crate) fn raw_chord_uses_win_modifier(raw: &str) -> bool {
 /// Returns `None` for keys with no stable VK code. jcode `cmd` maps to Alt
 /// (see module docs); a chord that is *both* cmd and alt still collapses onto
 /// a single MOD_ALT, which is the closest expressible binding.
+#[cfg(test)]
 pub(crate) fn chord_to_win32(chord: &KeyChord) -> Option<(u32, u32)> {
     chord_to_win32_with_super(chord, false)
 }
@@ -187,12 +188,14 @@ pub(crate) fn display_windows_hotkey(hotkey: &WindowsHotkey) -> String {
 }
 
 /// Escape a string for a single-quoted PowerShell literal.
+#[cfg(test)]
 fn ps_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "''"))
 }
 
 /// PowerShell expression resolving one entry's working directory at keypress
 /// time, with a `$HOME` fallback for missing/stale targets.
+#[cfg(test)]
 fn ps_dir_expr(dir: &str, last_dir_file: &str, last_repo_file: &str) -> String {
     match dir {
         "$HOME" => "(Resolve-JcodeDir $null)".to_string(),
@@ -209,6 +212,7 @@ fn ps_dir_expr(dir: &str, last_dir_file: &str, last_repo_file: &str) -> String {
 /// appears in them because the working directory is passed via
 /// `Start-Process -WorkingDirectory`. Entries whose chord cannot be expressed
 /// are skipped. Returns `None` when nothing is registerable.
+#[cfg(test)]
 pub(crate) fn render_windows_listener_ps1(
     entries: &[WindowsHotkey],
     launch_exe: &str,

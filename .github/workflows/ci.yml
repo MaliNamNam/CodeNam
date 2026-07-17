@@ -294,6 +294,19 @@ jobs:
               -CargoArgs @('test', '--locked', '--target', 'x86_64-pc-windows-msvc', '--lib', $testName, '--', '--nocapture')
           }
 
+      - name: Run Windows hotkey and power tests
+        shell: pwsh
+        run: |
+          & ./scripts/invoke_cargo_with_timeout.ps1 `
+            -Name 'Windows setup-hints tests' `
+            -TimeoutSeconds 300 `
+            -CargoArgs @('test', '--locked', '--target', 'x86_64-pc-windows-msvc', '-p', 'jcode-setup-hints', '--lib', '--', '--nocapture')
+
+          & ./scripts/invoke_cargo_with_timeout.ps1 `
+            -Name 'Windows power-inhibit tests' `
+            -TimeoutSeconds 300 `
+            -CargoArgs @('test', '--locked', '--target', 'x86_64-pc-windows-msvc', '-p', 'jcode-base', '--lib', 'power_inhibit::tests::windows_', '--', '--nocapture')
+
       - name: Run Windows e2e smoke tests
         shell: pwsh
         run: |

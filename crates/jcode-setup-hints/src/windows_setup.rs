@@ -159,21 +159,24 @@ fn ps_single_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "''"))
 }
 
-fn stop_windows_hotkey_listeners() {
-    let current_pid = std::process::id();
-    let script = format!(
+fn render_stop_windows_hotkey_listeners_script(current_pid: u32) -> String {
+    format!(
         r#"
 $current = {current_pid}
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object {{
-    ($_.ProcessId -ne $current) -and (
+    ($_.ProcessId -ne $current) -and ($_.ProcessId -ne $PID) -and (
       (($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.CommandLine -like '*jcode-hotkey*') -or
       (($_.Name -eq 'jcode.exe') -and $_.CommandLine -like '*--listen-windows-hotkey*')
     )
   }} |
   ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
 "#
-    );
+    )
+}
+
+fn stop_windows_hotkey_listeners() {
+    let script = render_stop_windows_hotkey_listeners_script(std::process::id());
     let _ = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &script])
         .output();
@@ -416,16 +419,25 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
     const MUTEX_NAME: &str = "Local\\JcodeLaunchHotkeyListener";
 
     let mutex_name = wide_null(MUTEX_NAME);
-    let mutex = unsafe { CreateMutexW(std::ptr::null_mut(), 1, mutex_name.as_ptr()) };
-    if mutex.is_null() {
-        return Err(std::io::Error::last_os_error()).context("failed to create hotkey mutex");
-    }
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+    let mut retry_count = 0;
+    let mutex = loop {
+        let mutex = unsafe { CreateMutexW(std::ptr::null_mut(), 1, mutex_name.as_ptr()) };
+        if mutex.is_null() {
+            return Err(std::io::Error::last_os_error()).context("failed to create hotkey mutex");
+        }
+        if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+            break mutex;
+        }
         unsafe {
             CloseHandle(mutex);
         }
-        return Ok(());
-    }
+        if retry_count >= 40 {
+            jcode_logging::warn("previous Windows launch-hotkey listener is still exiting");
+            return Ok(());
+        }
+        retry_count += 1;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
 
     let mut registered: Vec<(i32, WindowsHotkey)> = Vec::new();
     let mut copilot_entry: Option<(i32, WindowsHotkey)> = None;
@@ -508,12 +520,14 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
             } else {
                 None
             };
-            if let Some(entry) = entry
-                && let Err(err) = launch_windows_hotkey(entry)
-            {
-                jcode_logging::warn(&format!(
-                    "failed to launch jcode from Windows hotkey: {err}"
-                ));
+            if let Some(entry) = entry.cloned() {
+                std::thread::spawn(move || {
+                    if let Err(err) = launch_windows_hotkey(&entry) {
+                        jcode_logging::warn(&format!(
+                            "failed to launch jcode from Windows hotkey: {err}"
+                        ));
+                    }
+                });
             }
         }
         Ok(())
@@ -865,6 +879,13 @@ mod tests {
     #[test]
     fn powershell_single_quote_escapes_embedded_quotes() {
         assert_eq!(ps_single_quote(r"C:\O'Hara\jcode"), r"'C:\O''Hara\jcode'");
+    }
+
+    #[test]
+    fn listener_stop_sweep_excludes_jcode_and_powershell_processes_running_it() {
+        let script = render_stop_windows_hotkey_listeners_script(4242);
+        assert!(script.contains("($_.ProcessId -ne $current)"));
+        assert!(script.contains("($_.ProcessId -ne $PID)"));
     }
 
     #[test]
