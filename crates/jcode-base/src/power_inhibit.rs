@@ -272,11 +272,15 @@ impl WindowsPowerGuard {
                 thread: Some(thread),
             }),
             Ok(Err(error)) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    return Err(io::Error::other("Windows power guard thread panicked"));
+                }
                 Err(error)
             }
             Err(error) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    return Err(io::Error::other("Windows power guard thread panicked"));
+                }
                 Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     format!("Windows power guard exited before acquisition: {error}"),
@@ -293,7 +297,7 @@ impl WindowsPowerGuard {
 
     fn stop(&mut self) -> io::Result<()> {
         if let Some(stop_tx) = self.stop_tx.take() {
-            let _ = stop_tx.send(());
+            drop(stop_tx.send(()));
         }
 
         let clear_result = match self.done_rx.take() {
@@ -319,7 +323,9 @@ impl WindowsPowerGuard {
 #[cfg(windows)]
 impl Drop for WindowsPowerGuard {
     fn drop(&mut self) {
-        let _ = self.stop();
+        if let Err(error) = self.stop() {
+            jcode_logging::warn(&format!("failed to stop Windows power guard: {error}"));
+        }
     }
 }
 
@@ -333,23 +339,25 @@ fn run_windows_power_guard(
 
     let acquired = unsafe { SetThreadExecutionState(windows_execution_state_flags()) };
     if acquired == 0 {
-        let _ = ready_tx.send(Err(io::Error::last_os_error()));
+        drop(ready_tx.send(Err(io::Error::last_os_error())));
         return;
     }
 
     if ready_tx.send(Ok(())).is_err() {
-        let _ = unsafe { SetThreadExecutionState(windows_clear_execution_state_flags()) };
+        if unsafe { SetThreadExecutionState(windows_clear_execution_state_flags()) } == 0 {
+            jcode_logging::warn("failed to clear Windows power guard after receiver disconnect");
+        }
         return;
     }
 
-    let _ = stop_rx.recv();
+    drop(stop_rx.recv());
     let cleared = unsafe { SetThreadExecutionState(windows_clear_execution_state_flags()) };
     let result = if cleared == 0 {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
     };
-    let _ = done_tx.send(result);
+    drop(done_tx.send(result));
 }
 
 #[cfg(windows)]
