@@ -156,10 +156,10 @@ try {
         $installVariant = ($profile.InstallDir.ToUpperInvariant() + '\')
         $currentPath = "C:\Tools;$installVariant;$($profile.InstallDir);C:\Tools\;C:\Other"
         $pathUpdate = Resolve-JcodePathUpdate -InstallDir $profile.InstallDir -CurrentPath $currentPath
-        Assert-Equal "$($profile.InstallDir);C:\Tools;C:\Other" $pathUpdate.Path 'install PATH update should prepend canonical launcher dir and remove stale managed/duplicate entries'
+        Assert-Equal "$($profile.InstallDir);C:\Tools;C:\Tools\;C:\Other" $pathUpdate.Path 'install PATH update should prepend the canonical launcher dir without rewriting unrelated entries'
         Assert-PathCount $pathUpdate.Path $profile.InstallDir 1 'updated PATH should contain exactly one jcode launcher dir'
         Assert-Equal 2 $pathUpdate.RemovedManagedEntries 'PATH update should remove both stale jcode launcher entries before re-adding one'
-        Assert-Equal 1 $pathUpdate.RemovedDuplicateEntries 'PATH update should remove duplicate non-jcode entries during install'
+        Assert-Equal 0 $pathUpdate.RemovedDuplicateEntries 'PATH update should preserve unrelated duplicate entries'
 
         $script:setCalls = 0
         $script:broadcastCalls = 0
