@@ -772,7 +772,13 @@ function Get-JcodeHotkeyShortcutScript([string]$StartupShortcutPath, [string]$Jc
 
 function Install-JcodeHotkey([string]$JcodeExePath) {
     New-Item -ItemType Directory -Path $HotkeyDir -Force | Out-Null
-    Stop-JcodeHotkeyListeners
+    $skipProcessLifecycle = (
+        $env:JCODE_WINDOWS_SETUP_SKIP_EXTERNALS -eq "1" -or
+        $env:JCODE_WINDOWS_SETUP_SKIP_PROCESS_LIFECYCLE -eq "1"
+    )
+    if (-not $skipProcessLifecycle) {
+        Stop-JcodeHotkeyListeners
+    }
 
     # Upgrade cleanup: v0.47 and earlier wrote a generated PowerShell listener.
     # The first-party listener now lives in jcode.exe itself and is launched via
@@ -798,9 +804,11 @@ function Install-JcodeHotkey([string]$JcodeExePath) {
 
     $escapedExePath = $JcodeExePath.Replace("'", "''")
     $launchHotkeyCommand = "Start-Process -FilePath '$escapedExePath' -ArgumentList @('setup-hotkey', '--listen-windows-hotkey') -WindowStyle Hidden"
-    & powershell -NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -Command $launchHotkeyCommand | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Hotkey will start on next login, but could not be launched immediately"
+    if (-not $skipProcessLifecycle) {
+        & powershell -NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -Command $launchHotkeyCommand | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Hotkey will start on next login, but could not be launched immediately"
+        }
     }
 
     Write-Info "Configured Alt+; and the Copilot key to launch jcode"
@@ -1073,7 +1081,7 @@ if (Test-AlacrittyInstalled) {
 }
 
 if ($configuredHotkey) {
-    Write-Info "Global hotkey ready: Win+Shift+F23 (Copilot key) opens jcode"
+    Write-Info "Global launch keys ready: Alt+; and the Copilot key open jcode"
     Write-Host ""
 } elseif (-not $ConfigureHotkey) {
     Write-Info "Optional: run 'jcode setup-hotkey' to configure global launch hotkeys and terminal preferences."

@@ -377,8 +377,14 @@ unsafe extern "system" fn copilot_keyboard_hook(
                     if first_press {
                         let thread_id = COPILOT_HOOK_THREAD_ID.load(Ordering::Relaxed);
                         if thread_id != 0 {
-                            unsafe {
-                                PostThreadMessageW(thread_id, COPILOT_HOOK_MESSAGE, 0, 0);
+                            let posted = unsafe {
+                                PostThreadMessageW(thread_id, COPILOT_HOOK_MESSAGE, 0, 0)
+                            } != 0;
+                            if !posted {
+                                COPILOT_F23_HELD.store(false, Ordering::Relaxed);
+                                return unsafe {
+                                    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+                                };
                             }
                         }
                     }
@@ -403,7 +409,8 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
         MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetMessageW, MSG, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_HOTKEY,
+        GetMessageW, MSG, PM_NOREMOVE, PeekMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+        WH_KEYBOARD_LL, WM_HOTKEY,
     };
 
     const MUTEX_NAME: &str = "Local\\JcodeLaunchHotkeyListener";
@@ -444,6 +451,12 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
 
     let mut copilot_hook = std::ptr::null_mut();
     if copilot_entry.is_some() {
+        // `PostThreadMessageW` requires a thread message queue. Create it before
+        // the global hook can receive the first physical Copilot-key event.
+        let mut queue_probe: MSG = unsafe { std::mem::zeroed() };
+        unsafe {
+            PeekMessageW(&mut queue_probe, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+        }
         COPILOT_HOOK_THREAD_ID.store(
             unsafe { GetCurrentThreadId() },
             std::sync::atomic::Ordering::Relaxed,

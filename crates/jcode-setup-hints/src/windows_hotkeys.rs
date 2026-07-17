@@ -1,9 +1,10 @@
 //! Config-driven global launch hotkeys on Windows.
 //!
-//! Windows registers global hotkeys through the Win32 `RegisterHotKey` API. The
-//! long-lived listener is now first-party Rust (`jcode setup-hotkey
-//! --listen-windows-hotkey`); this pure module keeps chord-to-Win32 mapping and
-//! legacy script rendering testable without touching the machine.
+//! Windows registers normal global hotkeys through `RegisterHotKey`. Because
+//! Windows Shell reserves the physical Copilot chord, Win+Shift+F23 uses a
+//! low-level keyboard hook in the first-party Rust listener (`jcode setup-hotkey
+//! --listen-windows-hotkey`). This pure module keeps mapping and legacy script
+//! rendering testable without touching the machine.
 //!
 //! This module is the **pure** layer, mirroring `linux_niri`/`linux_env`:
 //!

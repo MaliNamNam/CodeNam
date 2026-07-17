@@ -14,6 +14,7 @@ $originalEnvironment = @{
     APPDATA = $env:APPDATA
     USERPROFILE = $env:USERPROFILE
     JCODE_HOME = $env:JCODE_HOME
+    JCODE_WINDOWS_SETUP_SKIP_PROCESS_LIFECYCLE = $env:JCODE_WINDOWS_SETUP_SKIP_PROCESS_LIFECYCLE
 }
 
 if (-not $Version) {
@@ -46,6 +47,7 @@ $env:LOCALAPPDATA = $localAppData
 $env:APPDATA = $appData
 $env:USERPROFILE = $userProfile
 $env:JCODE_HOME = $jcodeHome
+$env:JCODE_WINDOWS_SETUP_SKIP_PROCESS_LIFECYCLE = '1'
 
 $installScript = Join-Path $repoRoot 'scripts\install.ps1'
 
