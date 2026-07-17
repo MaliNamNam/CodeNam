@@ -541,9 +541,10 @@ port = 7643
 bind_addr = "0.0.0.0"
 
 [power]
-# Prevent the machine from suspending (idle/lid sleep) while any jcode session
-# is actively streaming/processing. The display can still sleep; only system
-# suspend is inhibited, and only for as long as work is in flight. (default: true)
+# Prevent automatic system sleep while any jcode session is actively working.
+# Linux also blocks lid-switch suspend. Windows still respects explicit lid-close
+# and power-button actions from your active power plan. The display may sleep.
+# The guard is held only for as long as work is in flight. (default: true)
 # Set JCODE_DISABLE_POWER_INHIBIT=1 to force-disable regardless of this setting.
 prevent_sleep_while_streaming = true
 
