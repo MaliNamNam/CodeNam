@@ -2477,7 +2477,7 @@ pub fn run_setup_launcher() -> Result<()> {
 /// - Windows uses [`windows_setup::create_windows_desktop_shortcut`] via
 ///   `jcode setup-launcher` instead (PowerShell/COM is too slow for the
 ///   startup path).
-#[cfg(not(windows))]
+#[cfg(any(test, not(windows)))]
 fn create_desktop_shortcut(state: &mut SetupHintsState) -> Result<()> {
     #[cfg(any(test, target_os = "macos"))]
     {

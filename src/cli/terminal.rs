@@ -379,7 +379,11 @@ fn cleanup_tui_runtime(state: &TuiRuntimeState, restore_terminal: bool) {
             let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
         }
         if state.mouse_capture {
-            let _ = sync_windows_vt_mouse_capture(false);
+            if let Err(error) = sync_windows_vt_mouse_capture(false) {
+                crate::logging::warn(&format!(
+                    "failed to disable Windows VT mouse capture: {error}"
+                ));
+            }
             let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
         }
         if state.keyboard_enhanced {

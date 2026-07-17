@@ -155,6 +155,14 @@ fn legacy_hotkey_ps1_path() -> Result<PathBuf> {
         .join("jcode-hotkey.ps1"))
 }
 
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
 fn ps_single_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "''"))
 }
@@ -231,18 +239,14 @@ fn create_startup_shortcut(exe_path: &Path) -> Result<()> {
 
 pub(super) fn uninstall_windows_hotkey_listener() -> Result<()> {
     stop_windows_hotkey_listeners();
-    let _ = std::fs::remove_file(startup_shortcut_path());
-    if let Ok(vbs) = hotkey_vbs_path() {
-        let _ = std::fs::remove_file(vbs);
-    }
-    if let Ok(ps1) = legacy_hotkey_ps1_path() {
-        let _ = std::fs::remove_file(ps1);
-    }
+    remove_file_if_exists(&startup_shortcut_path())?;
+    remove_file_if_exists(&hotkey_vbs_path()?)?;
+    remove_file_if_exists(&legacy_hotkey_ps1_path()?)?;
 
     let mut state = SetupHintsState::load();
     state.hotkey_configured = false;
     state.hotkey_dismissed = true;
-    let _ = state.save();
+    state.save()?;
     eprintln!("  \x1b[32m✓\x1b[0m Removed jcode Windows launch-hotkey listener");
     Ok(())
 }
@@ -270,8 +274,8 @@ fn create_hotkey_shortcut(_use_alacritty: bool) -> Result<()> {
     // Upgrade cleanup: older builds generated a PowerShell listener. The new
     // first-party lifecycle runs the Rust binary directly and removes the stale
     // script so future upgrades cannot accidentally resurrect it.
-    let _ = std::fs::remove_file(legacy_hotkey_ps1_path()?);
-    let _ = std::fs::remove_file(hotkey_vbs_path()?);
+    remove_file_if_exists(&legacy_hotkey_ps1_path()?)?;
+    remove_file_if_exists(&hotkey_vbs_path()?)?;
     create_startup_shortcut(&exe)?;
 
     use std::os::windows::process::CommandExt;
@@ -296,12 +300,12 @@ fn create_hotkey_shortcut(_use_alacritty: bool) -> Result<()> {
 
 fn launch_windows_hotkey(entry: &WindowsHotkey) -> Result<()> {
     let exe = std::env::current_exe()?;
-    let last_dir = super::mac_hotkey_last_dir_file()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let last_repo = super::mac_hotkey_last_repo_file()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let last_dir = super::mac_hotkey_last_dir_file()?
+        .to_string_lossy()
+        .into_owned();
+    let last_repo = super::mac_hotkey_last_repo_file()?
+        .to_string_lossy()
+        .into_owned();
     let cwd = crate::launch_hotkeys::resolve_target_dir(&entry.dir, &last_dir, &last_repo);
     let mut args = Vec::new();
     if entry.self_dev {
