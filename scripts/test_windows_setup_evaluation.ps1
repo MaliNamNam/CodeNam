@@ -290,10 +290,15 @@ try {
         $ok = Install-JcodeHotkey -JcodeExePath $jcodeExe
         Assert-Equal $true $ok 'hotkey install should succeed using the deterministic external-command skip hook'
         $vbsPath = Join-Path $profile.HotkeyDir 'jcode-hotkey-launcher.vbs'
-        Assert-PathExists $vbsPath 'hotkey install should create the VBS launcher under isolated JCODE_HOME'
-        $vbs = Get-Content -LiteralPath $vbsPath -Raw
-        Assert-Contains $vbs 'setup-hotkey --listen-windows-hotkey' 'VBS launcher should start the native Windows hotkey listener'
-        Assert-Contains $vbs $jcodeExe 'VBS launcher should preserve spaces and non-ASCII characters in the jcode path'
+        Assert-PathMissing $vbsPath 'hotkey install should remove the legacy hidden VBScript trampoline'
+        $shortcutScriptPath = Join-Path $profile.HotkeyDir 'jcode-hotkey-shortcut.ps1'
+        Assert-PathExists $shortcutScriptPath 'hotkey install should render the deterministic Startup shortcut script under the isolated JCODE_HOME'
+        $shortcutScript = Get-Content -LiteralPath $shortcutScriptPath -Raw
+        Assert-Contains $shortcutScript 'powershell.exe' 'Startup shortcut should target PowerShell directly'
+        Assert-Contains $shortcutScript 'ExecutionPolicy RemoteSigned' 'Startup shortcut should use RemoteSigned execution policy'
+        Assert-NotContains $shortcutScript 'ExecutionPolicy Bypass' 'Startup shortcut should not bypass execution policy'
+        Assert-Contains $shortcutScript 'setup-hotkey --listen-windows-hotkey' 'Startup shortcut should start the native Windows hotkey listener'
+        Assert-Contains $shortcutScript $jcodeExe 'Startup shortcut should preserve spaces and non-ASCII characters in the jcode path'
         Assert-PathMissing (Join-Path $profile.HotkeyDir 'jcode-hotkey.ps1') 'hotkey upgrade should remove the legacy PowerShell listener'
         $scriptText = Get-Content -LiteralPath $installScript -Raw
         Assert-Contains $scriptText 'Win+Shift+F23 (Copilot key)' 'installer should document the Copilot-key chord mapping'

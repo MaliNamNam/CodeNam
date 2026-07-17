@@ -549,7 +549,10 @@ function ConvertFrom-JcodeVersionOutput([string]$Output) {
         return $null
     }
 
-    if ($Output -match '(?im)^jcode\s+v?([0-9][0-9A-Za-z.+-]*)') {
+    # A genuinely fresh profile may print the one-time telemetry notice before
+    # the version. When output is captured by PowerShell, terminal control
+    # sequences can also leave the final `jcode v...` on the same logical line.
+    if ($Output -match '(?i)\bjcode\s+v?([0-9][0-9A-Za-z.+-]*)') {
         return "v$($Matches[1])"
     }
 
@@ -561,14 +564,24 @@ function Get-JcodeVersionFromBinary([string]$BinaryPath) {
         return $null
     }
 
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
-        $output = (& $BinaryPath --version 2>$null | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0) {
+        # Fresh profiles emit the one-time telemetry notice on stderr. Under
+        # Windows PowerShell with ErrorActionPreference=Stop, native stderr is
+        # promoted to a terminating NativeCommandError even when the process
+        # succeeds. Capture both streams without letting that notice abort the
+        # version probe.
+        $ErrorActionPreference = 'Continue'
+        $output = (& $BinaryPath --version 2>&1 | Out-String).Trim()
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
             return $null
         }
         return (ConvertFrom-JcodeVersionOutput $output)
     } catch {
         return $null
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 }
 
@@ -738,6 +751,25 @@ function Set-SetupHintsState([bool]$AlacrittyConfigured, [bool]$HotkeyConfigured
     $state | ConvertTo-Json | Set-Content -Path $SetupHintsPath -Encoding UTF8
 }
 
+function Get-JcodeHotkeyShortcutScript([string]$StartupShortcutPath, [string]$JcodeExePath) {
+    $escapedShortcutPath = $StartupShortcutPath.Replace("'", "''")
+    $escapedExePath = $JcodeExePath.Replace("'", "''")
+    $listenerArguments = "-NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -Command `"& '$escapedExePath' setup-hotkey --listen-windows-hotkey`""
+    $escapedListenerArguments = $listenerArguments.Replace("'", "''")
+    $shortcutLines = @(
+        '$ErrorActionPreference = ''Stop''',
+        '$shell = New-Object -ComObject WScript.Shell',
+        "`$shortcut = `$shell.CreateShortcut('$escapedShortcutPath')",
+        "`$shortcut.TargetPath = 'powershell.exe'",
+        "`$shortcut.Arguments = '$escapedListenerArguments'",
+        "`$shortcut.Description = 'jcode Win+Shift+F23 hotkey listener'",
+        '$shortcut.WindowStyle = 7',
+        '$shortcut.Save()',
+        "Write-Output 'OK'"
+    )
+    return ($shortcutLines -join "`r`n")
+}
+
 function Install-JcodeHotkey([string]$JcodeExePath) {
     New-Item -ItemType Directory -Path $HotkeyDir -Force | Out-Null
     Stop-JcodeHotkeyListeners
@@ -746,30 +778,11 @@ function Install-JcodeHotkey([string]$JcodeExePath) {
     # The first-party listener now lives in jcode.exe itself and is launched via
     # `jcode setup-hotkey --listen-windows-hotkey` from a login shortcut.
     Remove-Item -Path (Join-Path $HotkeyDir "jcode-hotkey.ps1") -Force -ErrorAction SilentlyContinue
-
-    $vbsPath = Join-Path $HotkeyDir "jcode-hotkey-launcher.vbs"
-    $vbsContent = @(
-        'Set objShell = CreateObject("WScript.Shell")',
-        ('objShell.Run """{0}"" setup-hotkey --listen-windows-hotkey", 0, False' -f $JcodeExePath)
-    ) -join "`r`n"
-    Set-Content -Path $vbsPath -Value $vbsContent -Encoding Unicode
+    Remove-Item -Path (Join-Path $HotkeyDir "jcode-hotkey-launcher.vbs") -Force -ErrorAction SilentlyContinue
     $startupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
     New-Item -ItemType Directory -Path $startupDir -Force | Out-Null
-    $startupShortcutPath = (Join-Path $startupDir "jcode-hotkey.lnk").Replace("'", "''")
-    $escapedVbsPath = $vbsPath.Replace("'", "''")
-
-    $shortcutLines = @(
-        '$ErrorActionPreference = ''Stop''',
-        '$shell = New-Object -ComObject WScript.Shell',
-        "`$shortcut = `$shell.CreateShortcut('$startupShortcutPath')",
-        "`$shortcut.TargetPath = 'wscript.exe'",
-        ("`$shortcut.Arguments = '""{0}""'" -f $escapedVbsPath),
-        "`$shortcut.Description = 'jcode Win+Shift+F23 hotkey listener'",
-        '`$shortcut.WindowStyle = 7',
-        '`$shortcut.Save()',
-        "Write-Output 'OK'"
-    )
-    $shortcutScript = $shortcutLines -join "`r`n"
+    $startupShortcutPath = Join-Path $startupDir "jcode-hotkey.lnk"
+    $shortcutScript = Get-JcodeHotkeyShortcutScript -StartupShortcutPath $startupShortcutPath -JcodeExePath $JcodeExePath
 
     if ($env:JCODE_WINDOWS_SETUP_SKIP_EXTERNALS -eq "1") {
         Set-Content -Path (Join-Path $HotkeyDir "jcode-hotkey-shortcut.ps1") -Value $shortcutScript -Encoding UTF8
@@ -783,8 +796,9 @@ function Install-JcodeHotkey([string]$JcodeExePath) {
         return $false
     }
 
-    $launchHotkeyCommand = "Start-Process wscript.exe -ArgumentList '""{0}""' -WindowStyle Hidden" -f $vbsPath
-    & powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command $launchHotkeyCommand | Out-Null
+    $escapedExePath = $JcodeExePath.Replace("'", "''")
+    $launchHotkeyCommand = "Start-Process -FilePath '$escapedExePath' -ArgumentList @('setup-hotkey', '--listen-windows-hotkey') -WindowStyle Hidden"
+    & powershell -NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -Command $launchHotkeyCommand | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "Hotkey will start on next login, but could not be launched immediately"
     }

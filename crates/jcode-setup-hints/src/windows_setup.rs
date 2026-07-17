@@ -177,25 +177,36 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         .output();
 }
 
-fn create_startup_shortcut(vbs_path: &Path) -> Result<()> {
-    let startup_dir = startup_dir();
-    std::fs::create_dir_all(&startup_dir)?;
-    let shortcut_path = startup_shortcut_path();
-    let vbs_arg = format!("'\"{}\"'", vbs_path.to_string_lossy().replace('\'', "''"));
-    let script = format!(
+fn render_startup_shortcut_script(shortcut_path: &Path, exe_path: &Path) -> String {
+    let listener_command = format!(
+        "& {} setup-hotkey --listen-windows-hotkey",
+        ps_single_quote(&exe_path.to_string_lossy())
+    );
+    let listener_arguments = format!(
+        "-NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -Command \"{listener_command}\""
+    );
+    format!(
         r#"
 $ErrorActionPreference = "Stop"
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut({shortcut_path})
-$shortcut.TargetPath = 'wscript.exe'
-$shortcut.Arguments = {vbs_arg}
-$shortcut.Description = 'jcode Win+Shift+F23 hotkey listener'$shortcut.WindowStyle = 7
+$shortcut.TargetPath = 'powershell.exe'
+$shortcut.Arguments = {listener_arguments}
+$shortcut.Description = 'jcode Win+Shift+F23 hotkey listener'
+$shortcut.WindowStyle = 7
 $shortcut.Save()
 Write-Output 'OK'
 "#,
         shortcut_path = ps_single_quote(&shortcut_path.to_string_lossy()),
-        vbs_arg = vbs_arg,
-    );
+        listener_arguments = ps_single_quote(&listener_arguments),
+    )
+}
+
+fn create_startup_shortcut(exe_path: &Path) -> Result<()> {
+    let startup_dir = startup_dir();
+    std::fs::create_dir_all(&startup_dir)?;
+    let shortcut_path = startup_shortcut_path();
+    let script = render_startup_shortcut_script(&shortcut_path, exe_path);
 
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &script])
@@ -247,7 +258,6 @@ fn create_hotkey_shortcut(_use_alacritty: bool) -> Result<()> {
     }
 
     let exe = std::env::current_exe()?;
-    let exe_path = exe.to_string_lossy();
     let hotkey_dir = storage::jcode_dir()?.join("hotkey");
     std::fs::create_dir_all(&hotkey_dir)?;
     stop_windows_hotkey_listeners();
@@ -256,20 +266,18 @@ fn create_hotkey_shortcut(_use_alacritty: bool) -> Result<()> {
     // first-party lifecycle runs the Rust binary directly and removes the stale
     // script so future upgrades cannot accidentally resurrect it.
     let _ = std::fs::remove_file(legacy_hotkey_ps1_path()?);
+    let _ = std::fs::remove_file(hotkey_vbs_path()?);
+    create_startup_shortcut(&exe)?;
 
-    let vbs_path = hotkey_vbs_path()?;
-    let vbs_content = format!(
-        r#"Set objShell = CreateObject("WScript.Shell")
-objShell.Run """{}"" setup-hotkey --listen-windows-hotkey", 0, False
-"#,
-        exe_path
-    );
-    std::fs::write(&vbs_path, &vbs_content)?;
-    create_startup_shortcut(&vbs_path)?;
-
-    let start_output = std::process::Command::new("wscript.exe")
-        .arg(&vbs_path)
-        .output();
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let start_output = std::process::Command::new(&exe)
+        .args(["setup-hotkey", "--listen-windows-hotkey"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
     if let Err(e) = start_output {
         eprintln!(
             "  \x1b[33m⚠\x1b[0m  Could not start hotkey listener now: {}",
@@ -739,6 +747,21 @@ mod tests {
     #[test]
     fn powershell_single_quote_escapes_embedded_quotes() {
         assert_eq!(ps_single_quote(r"C:\O'Hara\jcode"), r"'C:\O''Hara\jcode'");
+    }
+
+    #[test]
+    fn startup_shortcut_uses_native_listener_without_vbscript_or_bypass() {
+        let script = render_startup_shortcut_script(
+            Path::new(r"C:\Users\O'Hara\Startup\jcode-hotkey.lnk"),
+            Path::new(r"C:\Program Files\Jcode O'Hara\jcode.exe"),
+        );
+        assert!(script.contains("$shortcut.TargetPath = 'powershell.exe'"));
+        assert!(script.contains("-ExecutionPolicy RemoteSigned"));
+        assert!(script.contains("setup-hotkey --listen-windows-hotkey"));
+        assert!(script.contains("$shortcut.WindowStyle = 7\n$shortcut.Save()"));
+        assert!(!script.contains("ExecutionPolicy Bypass"));
+        assert!(!script.contains("wscript.exe"));
+        assert!(!script.contains(".vbs"));
     }
 }
 

@@ -71,7 +71,11 @@ try {
 
     Write-Host 'test_local_binary_version_output_parsing'
     Assert-Equal 'v0.47.0' (ConvertFrom-JcodeVersionOutput 'jcode v0.47.0 (f7f5898c)') 'local artifact version parser should accept normal jcode --version output'
+    Assert-Equal 'v0.47.0' (ConvertFrom-JcodeVersionOutput 'jcode collects anonymous usage statistics. jcode v0.47.0 (f7f5898c)') 'local artifact version parser should accept fresh-profile telemetry before version output'
     Assert-Equal $null (ConvertFrom-JcodeVersionOutput 'not a jcode binary') 'local artifact version parser should reject unrelated output'
+    $freshProfileBinary = Join-Path $testRoot 'fresh-profile-version.cmd'
+    Set-Content -LiteralPath $freshProfileBinary -Value "@echo off`r`n>&2 echo jcode collects anonymous usage statistics.`r`necho jcode v0.47.0 (f7f5898c)" -NoNewline
+    Assert-Equal 'v0.47.0' (Get-JcodeVersionFromBinary $freshProfileBinary) 'binary version probe should tolerate a successful fresh-profile telemetry notice on stderr'
 
     Write-Host 'test_release_checksum_validation'
     $checksumFile = Join-Path $testRoot 'checksum.bin'
@@ -94,6 +98,16 @@ try {
     Assert-Equal $false ([bool]$BuildFromSource) 'installer should not start a source build by default'
     $installText = Get-Content -LiteralPath $installScript -Raw
     Assert-True ($installText.Contains('will not start a long source build automatically')) 'missing release assets should produce an explicit source-build opt-in message'
+
+    Write-Host 'test_hotkey_shortcut_script_is_valid_powershell'
+    $shortcutScript = Get-JcodeHotkeyShortcutScript -StartupShortcutPath "C:\Users\Test User\AppData\Roaming\jcode's hotkey.lnk" -JcodeExePath "C:\Program Files\jcode's bin\jcode.exe"
+    Assert-True ($shortcutScript -match "(?m)^\`$shortcut\.TargetPath = 'powershell\.exe'\r?$") 'shortcut script should target PowerShell directly'
+    Assert-True ($shortcutScript -match '(?m)^\$shortcut\.Arguments = .*ExecutionPolicy RemoteSigned.*--listen-windows-hotkey.*\r?$') 'shortcut script should launch the native listener with RemoteSigned'
+    Assert-True (-not $shortcutScript.Contains('ExecutionPolicy Bypass')) 'shortcut script should not bypass PowerShell execution policy'
+    Assert-True ($shortcutScript -match '(?m)^\$shortcut\.WindowStyle = 7\r?$') 'shortcut script should assign WindowStyle without escaping the variable name'
+    Assert-True ($shortcutScript -match '(?m)^\$shortcut\.Save\(\)\r?$') 'shortcut script should call Save without escaping the variable name'
+    Assert-True (-not $shortcutScript.Contains('`$shortcut')) 'shortcut script should not contain literal backticks before shortcut variables'
+    [void][scriptblock]::Create($shortcutScript)
 
     Write-Host 'test_upgrade_replaces_launcher_no_extra_path'
     $sourceDir = Join-Path $testRoot 'sources'
