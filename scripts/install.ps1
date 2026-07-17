@@ -68,8 +68,26 @@ $HotkeyDir = Join-Path $JcodeHome "hotkey"
 $SetupHintsPath = Join-Path $JcodeHome "setup_hints.json"
 
 function Write-Info($msg) { Write-Host $msg -ForegroundColor Blue }
-function Write-Err($msg) { Write-Host "error: $msg" -ForegroundColor Red; exit 1 }
+function Write-Err($msg) { throw "error: $msg" }
 function Write-Warn($msg) { Write-Host "warning: $msg" -ForegroundColor Yellow }
+
+function Get-JcodeSha256FromManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$ManifestText,
+        [Parameter(Mandatory = $true)][string]$AssetName
+    )
+
+    foreach ($line in ($ManifestText -split "`r?`n")) {
+        if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(.+?)\s*$') {
+            $candidateName = [System.IO.Path]::GetFileName($Matches[2])
+            if ($candidateName -eq $AssetName) {
+                return $Matches[1].ToLowerInvariant()
+            }
+        }
+    }
+
+    return $null
+}
 
 function Get-ReleaseChecksum([string]$ReleaseTag, [string]$AssetName) {
     $checksumUrl = "https://github.com/$Repo/releases/download/$ReleaseTag/SHA256SUMS"
@@ -80,30 +98,26 @@ function Get-ReleaseChecksum([string]$ReleaseTag, [string]$AssetName) {
         Write-Err "Could not download SHA256SUMS for $ReleaseTag. Refusing to install an unverified download: $_"
     }
 
-    foreach ($line in ($contents -split "`r?`n")) {
-        if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$') {
-            if ($Matches[2] -eq $AssetName) {
-                return $Matches[1].ToLowerInvariant()
-            }
-        }
-    }
+    $expected = Get-JcodeSha256FromManifest -ManifestText $contents -AssetName $AssetName
+    if ($expected) { return $expected }
 
     Write-Err "SHA256SUMS for $ReleaseTag does not list $AssetName"
 }
 
-function Assert-FileChecksum([string]$Path, [string]$ExpectedSha256, [string]$AssetName) {
+function Assert-JcodeFileChecksum([string]$FilePath, [string]$ExpectedSha256, [string]$AssetName) {
     try {
-        $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actual = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
     } catch {
         Write-Err "Could not calculate SHA256 for ${AssetName}: $_"
     }
 
     if ($actual -ne $ExpectedSha256) {
-        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $FilePath -Force -ErrorAction SilentlyContinue
         Write-Err "SHA256 verification failed for $AssetName (expected $ExpectedSha256, got $actual)"
     }
 
     Write-Info "Verified SHA256: $AssetName"
+    return $actual
 }
 
 function Get-JcodeLocalAppDataDir {
@@ -188,12 +202,9 @@ function Resolve-JcodePathUpdate {
         [switch]$RemoveOnly
     )
 
-    $installKey = ConvertTo-JcodePathKey $InstallDir
     $managedKeys = Get-JcodeManagedPathKeys -InstallDir $InstallDir
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $nextEntries = @()
     $removedManaged = 0
-    $removedDuplicates = 0
 
     foreach ($entry in (Split-JcodePathList $CurrentPath)) {
         $key = ConvertTo-JcodePathKey $entry
@@ -206,20 +217,11 @@ function Resolve-JcodePathUpdate {
             continue
         }
 
-        if (-not $RemoveOnly) {
-            if ($seen.Contains($key)) {
-                $removedDuplicates += 1
-                continue
-            }
-            [void]$seen.Add($key)
-        }
-
         $nextEntries += $entry
     }
 
     if (-not $RemoveOnly) {
         $nextEntries = @($InstallDir) + $nextEntries
-        [void]$seen.Add($installKey)
     }
 
     $nextPath = Join-JcodePathList $nextEntries
@@ -229,7 +231,7 @@ function Resolve-JcodePathUpdate {
         Path = $nextPath
         Changed = $changed
         RemovedManagedEntries = $removedManaged
-        RemovedDuplicateEntries = $removedDuplicates
+        RemovedDuplicateEntries = 0
         AddedLauncherEntry = (-not $RemoveOnly)
         InstallDir = $InstallDir
     }
@@ -585,69 +587,6 @@ function Get-JcodeVersionFromBinary([string]$BinaryPath) {
     }
 }
 
-function Get-JcodeSha256FromManifest {
-    param(
-        [Parameter(Mandatory = $true)][string]$ManifestText,
-        [Parameter(Mandatory = $true)][string]$AssetName
-    )
-
-    foreach ($line in ($ManifestText -split "`r?`n")) {
-        if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(.+?)\s*$') {
-            $candidateName = [System.IO.Path]::GetFileName($Matches[2])
-            if ($candidateName -eq $AssetName) {
-                return $Matches[1].ToLowerInvariant()
-            }
-        }
-    }
-
-    return $null
-}
-
-function Assert-JcodeFileChecksum {
-    param(
-        [Parameter(Mandatory = $true)][string]$FilePath,
-        [Parameter(Mandatory = $true)][string]$ManifestText,
-        [Parameter(Mandatory = $true)][string]$AssetName
-    )
-
-    $expected = Get-JcodeSha256FromManifest -ManifestText $ManifestText -AssetName $AssetName
-    if (-not $expected) {
-        throw "SHA256SUMS does not contain an entry for $AssetName"
-    }
-
-    $actual = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $expected) {
-        throw "SHA256 mismatch for $AssetName (expected $expected, got $actual)"
-    }
-
-    return $actual
-}
-
-function Confirm-JcodeDownloadedAsset {
-    param(
-        [Parameter(Mandatory = $true)][string]$FilePath,
-        [Parameter(Mandatory = $true)][string]$AssetName,
-        [Parameter(Mandatory = $true)][string]$Version
-    )
-
-    $checksumUrl = "https://github.com/$Repo/releases/download/$Version/SHA256SUMS"
-    try {
-        $manifest = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content
-    } catch {
-        Write-Warn "SHA256SUMS is not available yet; continuing with HTTPS download validation only"
-        return $false
-    }
-
-    try {
-        Assert-JcodeFileChecksum -FilePath $FilePath -ManifestText $manifest -AssetName $AssetName | Out-Null
-    } catch {
-        Write-Err $_.Exception.Message
-    }
-
-    Write-Info "Verified SHA256 checksum for $AssetName"
-    return $true
-}
-
 function Assert-JcodeBinaryCandidate {
     param(
         [Parameter(Mandatory = $true)][string]$BinaryPath,
@@ -946,7 +885,7 @@ if ($ResolvedArtifactExePath) {
 if (-not $ResolvedArtifactExePath -and -not $ResolvedArtifactTgzPath -and $DownloadMode) {
     $downloadedAssetName = if ($DownloadMode -eq "bin") { "$Artifact.exe" } else { "$Artifact.tar.gz" }
     $expectedSha256 = Get-ReleaseChecksum -ReleaseTag $Version -AssetName $downloadedAssetName
-    Assert-FileChecksum -Path $DownloadPath -ExpectedSha256 $expectedSha256 -AssetName $downloadedAssetName
+    Assert-JcodeFileChecksum -FilePath $DownloadPath -ExpectedSha256 $expectedSha256 -AssetName $downloadedAssetName | Out-Null
 }
 
 $DestBin = Join-Path $VersionDir "jcode.exe"
@@ -991,7 +930,10 @@ if ($DownloadMode -eq "tar") {
     }
 
     Write-Info "Building jcode from source (this can take several minutes)..."
-    $cargoResult = Invoke-ProcessWithTimeout -FilePath "cargo" -ArgumentList @("build", "--release", "--manifest-path", (Join-Path $SrcDir "Cargo.toml")) -TimeoutSeconds 1800 -FriendlyName "cargo-build" -CaptureOutput
+    $cargoResult = Invoke-ProcessWithTimeout -FilePath "cargo" -ArgumentList @(
+        "build", "--release", "--locked", "-p", "jcode", "--bin", "jcode",
+        "--manifest-path", (Join-Path $SrcDir "Cargo.toml")
+    ) -TimeoutSeconds 1800 -FriendlyName "cargo-build" -CaptureOutput
     if ($cargoResult.TimedOut) {
         Write-LogTail -Path $cargoResult.StdoutPath -Label "cargo stdout"
         Write-LogTail -Path $cargoResult.StderrPath -Label "cargo stderr"

@@ -27,7 +27,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Write-Info($msg) { Write-Host $msg -ForegroundColor Blue }
-function Write-Err($msg) { Write-Host "error: $msg" -ForegroundColor Red; exit 1 }
+function Write-Err($msg) { throw "error: $msg" }
 function Write-Warn($msg) { Write-Host "warning: $msg" -ForegroundColor Yellow }
 
 function Get-JcodeLocalAppDataDir {
@@ -96,6 +96,54 @@ function ConvertTo-JcodePathKey([string]$PathValue) {
     try { $clean = [System.IO.Path]::GetFullPath($clean) } catch {}
     $clean = $clean.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
     return $clean.ToUpperInvariant()
+}
+
+function Test-JcodeSafePurgePath([string]$PathValue) {
+    $pathKey = ConvertTo-JcodePathKey $PathValue
+    if (-not $pathKey) { return $false }
+
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($PathValue.Trim().Trim('"')))
+        $rootKey = ConvertTo-JcodePathKey ([System.IO.Path]::GetPathRoot($fullPath))
+        $leafName = [System.IO.Path]::GetFileName($fullPath.TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        ))
+    } catch {
+        return $false
+    }
+
+    if ($pathKey -eq $rootKey -or $leafName -notmatch '(?i)^\.?jcode(?:[-_ ].*)?$') {
+        return $false
+    }
+
+    $separator = [string][System.IO.Path]::DirectorySeparatorChar
+    foreach ($protectedPath in @(
+        $env:USERPROFILE,
+        $env:HOME,
+        $env:LOCALAPPDATA,
+        $env:APPDATA,
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    )) {
+        $protectedKey = ConvertTo-JcodePathKey $protectedPath
+        if (-not $protectedKey) { continue }
+        if ($pathKey -eq $protectedKey -or $protectedKey.StartsWith($pathKey + $separator, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-JcodeManagedExecutablePath([string]$ExecutablePath, [string]$LauncherPath, [string]$BuildsDir) {
+    $executableKey = ConvertTo-JcodePathKey $ExecutablePath
+    $launcherKey = ConvertTo-JcodePathKey $LauncherPath
+    $buildsKey = ConvertTo-JcodePathKey $BuildsDir
+    if (-not $executableKey) { return $false }
+    if ($launcherKey -and $executableKey -eq $launcherKey) { return $true }
+
+    $separator = [string][System.IO.Path]::DirectorySeparatorChar
+    return [bool]($buildsKey -and $executableKey.StartsWith($buildsKey + $separator, [System.StringComparison]::OrdinalIgnoreCase))
 }
 
 function Split-JcodePathList([string]$PathValue) {
@@ -231,6 +279,9 @@ $userDataDir = if ($env:JCODE_HOME) {
 }
 $startupShortcutPath = Get-JcodeStartupShortcutPath
 $hotkeyArtifactPaths = @(Get-JcodeHotkeyArtifactPaths -UserDataDir $userDataDir)
+if ($Purge -and -not (Test-JcodeSafePurgePath $userDataDir)) {
+    Write-Err "Refusing to purge unsafe JCODE_HOME path '$userDataDir'. Use a dedicated .jcode or jcode-* directory."
+}
 
 $targets = @()
 if (Test-Path -LiteralPath $launcherPath) { $targets += "$launcherPath (launcher)" }
@@ -272,6 +323,7 @@ if (-not $Yes) {
 
 try {
     Get-CimInstance Win32_Process -Filter "Name = 'jcode.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { Test-JcodeManagedExecutablePath -ExecutablePath $_.ExecutablePath -LauncherPath $launcherPath -BuildsDir $buildsDir } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 } catch {}
 
@@ -329,5 +381,8 @@ Write-Info "Reinstall with: irm https://raw.githubusercontent.com/1jehuang/jcode
 
 if ($env:JCODE_UNINSTALL_PS1_IMPORT_ONLY -ne "1") {
     $exitCode = Invoke-JcodeUninstall -InstallDir $InstallDir -Purge:$Purge -DryRun:$DryRun -Yes:$Yes
-    if ($null -ne $exitCode) { exit ([int]$exitCode) }
+    if ($null -ne $exitCode -and [int]$exitCode -ne 0) {
+        if ($MyInvocation.MyCommand.Path) { exit ([int]$exitCode) }
+        $global:LASTEXITCODE = [int]$exitCode
+    }
 }

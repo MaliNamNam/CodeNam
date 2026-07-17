@@ -46,10 +46,10 @@ try {
     $installVariant = ($installDir.ToUpperInvariant() + '\')
     $currentPath = "C:\Tools;$installVariant;$installDir;C:\Tools\;C:\Other"
     $pathUpdate = Resolve-JcodePathUpdate -InstallDir $installDir -CurrentPath $currentPath
-    Assert-Equal "$installDir;C:\Tools;C:\Other" $pathUpdate.Path 'install path update should prepend canonical launcher dir and remove stale managed/duplicate entries'
+    Assert-Equal "$installDir;C:\Tools;C:\Tools\;C:\Other" $pathUpdate.Path 'install path update should prepend the canonical launcher dir without rewriting unrelated entries'
     Assert-PathCount $pathUpdate.Path $installDir 1 'updated PATH should contain exactly one jcode launcher dir'
     Assert-Equal 2 $pathUpdate.RemovedManagedEntries 'path update should remove both stale jcode launcher entries before re-adding one'
-    Assert-Equal 1 $pathUpdate.RemovedDuplicateEntries 'path update should remove duplicate non-jcode entries during install'
+    Assert-Equal 0 $pathUpdate.RemovedDuplicateEntries 'path update should preserve unrelated duplicate entries'
     $secondUpdate = Resolve-JcodePathUpdate -InstallDir $installDir -CurrentPath $pathUpdate.Path
     Assert-Equal $false $secondUpdate.Changed 'second install path update should be idempotent'
     Assert-PathCount $secondUpdate.Path $installDir 1 'idempotent update should still contain exactly one launcher dir'
@@ -89,14 +89,16 @@ try {
     $digest = (Get-FileHash -LiteralPath $checksumFile -Algorithm SHA256).Hash.ToLowerInvariant()
     $manifest = "$digest  nested/path/jcode-windows-x86_64.exe"
     Assert-Equal $digest (Get-JcodeSha256FromManifest -ManifestText $manifest -AssetName 'jcode-windows-x86_64.exe') 'checksum parser should match release assets by file name'
-    Assert-Equal $digest (Assert-JcodeFileChecksum -FilePath $checksumFile -ManifestText $manifest -AssetName 'jcode-windows-x86_64.exe') 'checksum validation should accept the matching digest'
+    Assert-Equal $null (Get-JcodeSha256FromManifest -ManifestText $manifest -AssetName 'missing.exe') 'checksum parser should fail closed when the requested asset is absent'
+    Assert-Equal $digest (Assert-JcodeFileChecksum -FilePath $checksumFile -ExpectedSha256 $digest -AssetName 'jcode-windows-x86_64.exe') 'checksum validation should accept the matching digest'
     $checksumThrew = $false
     try {
-        Assert-JcodeFileChecksum -FilePath $checksumFile -ManifestText (('0' * 64) + '  jcode-windows-x86_64.exe') -AssetName 'jcode-windows-x86_64.exe' | Out-Null
+        Assert-JcodeFileChecksum -FilePath $checksumFile -ExpectedSha256 ('0' * 64) -AssetName 'jcode-windows-x86_64.exe' | Out-Null
     } catch {
         $checksumThrew = $true
     }
     Assert-Equal $true $checksumThrew 'checksum validation should reject a mismatched digest'
+    Assert-Equal $false (Test-Path -LiteralPath $checksumFile) 'checksum validation should delete a mismatched download'
     $armManifest = "$digest  nested/path/jcode-windows-aarch64.exe"
     Assert-Equal $digest (Get-JcodeSha256FromManifest -ManifestText $armManifest -AssetName 'jcode-windows-aarch64.exe') 'checksum parser should match the Windows ARM64 release asset'
 
@@ -106,6 +108,7 @@ try {
     Assert-Equal $false ([bool]$BuildFromSource) 'installer should not start a source build by default'
     $installText = Get-Content -LiteralPath $installScript -Raw
     Assert-True ($installText.Contains('will not start a long source build automatically')) 'missing release assets should produce an explicit source-build opt-in message'
+    Assert-True ($installText.Contains('"--locked", "-p", "jcode", "--bin", "jcode"')) 'source-build fallback should compile only the locked jcode binary target'
 
     Write-Host 'test_hotkey_shortcut_script_is_valid_powershell'
     $shortcutScript = Get-JcodeHotkeyShortcutScript -StartupShortcutPath "C:\Users\Test User\AppData\Roaming\jcode's hotkey.lnk" -JcodeExePath "C:\Program Files\jcode's bin\jcode.exe"

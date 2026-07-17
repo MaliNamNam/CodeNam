@@ -366,6 +366,16 @@ try {
         return $update
     }
 
+    Invoke-Case 'uninstall_guards_purge_paths_and_process_scope' {
+        $profile = New-IsolatedWindowsProfile 'uninstall-safety'
+        Assert-Equal $true (Test-JcodeSafePurgePath $profile.JcodeHome) 'dedicated jcode data directories should be purgeable'
+        Assert-Equal $false (Test-JcodeSafePurgePath $profile.UserProfile) 'the user profile must never be accepted as a purge target'
+        Assert-Equal $false (Test-JcodeSafePurgePath $profile.Root) 'a parent workspace must never be accepted as a purge target'
+        Assert-Equal $true (Test-JcodeManagedExecutablePath -ExecutablePath $profile.LauncherPath -LauncherPath $profile.LauncherPath -BuildsDir $profile.BuildsDir) 'the installed launcher should be recognized as managed'
+        Assert-Equal $true (Test-JcodeManagedExecutablePath -ExecutablePath (Join-Path $profile.BuildsDir 'stable\jcode.exe') -LauncherPath $profile.LauncherPath -BuildsDir $profile.BuildsDir) 'installed version binaries should be recognized as managed'
+        Assert-Equal $false (Test-JcodeManagedExecutablePath -ExecutablePath (Join-Path $profile.Root 'development\jcode.exe') -LauncherPath $profile.LauncherPath -BuildsDir $profile.BuildsDir) 'unrelated development binaries must not be terminated'
+    }
+
     Invoke-Case 'uninstall_cleanup_removes_binaries_path_and_keeps_user_data' {
         $profile = New-IsolatedWindowsProfile 'uninstall-cleanup'
         New-Item -ItemType Directory -Path $profile.InstallDir -Force | Out-Null
