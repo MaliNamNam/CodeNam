@@ -134,6 +134,15 @@ three-second timeout and a 64 KiB maximum response. It sends a
 `User-Agent: jcode/<version>` header and a random
 `x-jcode-discovery-request-id` correlation header.
 
+Current clients also send coarse provenance headers: the random local session
+ID, whether session metadata was available, self-dev/debug/canary flags, tool
+execution mode, build channel, Git-checkout/CI/Cargo-run flags. The service uses
+these signals to classify maintainer alerts as likely-user, self-dev, internal
+test, canary, development, legacy, or unverified traffic. These values are
+client-reported evidence rather than cryptographic proof. They contain no
+transcript content, file paths, account identity, credentials, or user-authored
+text.
+
 Runs launched by `scripts/benchmark_discovery.py` also send
 `x-jcode-discovery-benchmark: 1`. The service must retain that marker with its
 request logs so benchmark traffic can be excluded from ordinary discovery and

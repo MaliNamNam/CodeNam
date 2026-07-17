@@ -76,6 +76,41 @@ fn test_source_state(repo_dir: &std::path::Path) -> build::SourceState {
     }
 }
 
+fn request_fixture(
+    request_id: &str,
+    state: BuildRequestState,
+    requested_at: String,
+) -> BuildRequest {
+    let source = test_source_state(std::path::Path::new("/tmp/jcode"));
+    BuildRequest {
+        request_id: request_id.to_string(),
+        background_task_id: None,
+        session_id: "session-history-test".to_string(),
+        session_short_name: None,
+        session_title: None,
+        reason: request_id.to_string(),
+        repo_dir: "/tmp/jcode".to_string(),
+        repo_scope: source.repo_scope.clone(),
+        worktree_scope: source.worktree_scope.clone(),
+        command: "cargo test -p jcode-base".to_string(),
+        requested_at,
+        started_at: None,
+        completed_at: None,
+        state,
+        version: None,
+        dedupe_key: None,
+        requested_source: Some(source),
+        built_source: None,
+        published_version: None,
+        last_progress: None,
+        validated: false,
+        error: None,
+        output_file: None,
+        status_file: None,
+        attached_to_request_id: None,
+    }
+}
+
 #[test]
 fn build_lock_is_removed_on_drop_and_can_be_reacquired() {
     let _env_lock = lock_env();
@@ -96,6 +131,99 @@ fn build_lock_is_removed_on_drop_and_can_be_reacquired() {
         .expect("lock should be reacquirable after drop");
     drop(second);
     assert!(!path.exists(), "reacquired lock should also clean up");
+}
+
+#[test]
+fn terminal_request_history_is_archived_without_touching_active_requests() {
+    let _storage_guard = crate::storage::lock_test_env();
+    let _env_lock = lock_env();
+    let temp = tempfile::tempdir().expect("temp jcode home");
+    let _home = EnvVarGuard::set("JCODE_HOME", temp.path());
+    let _limit = EnvVarGuard::set("JCODE_SELFDEV_REQUEST_HISTORY_LIMIT", "2");
+
+    let base = Utc::now() - chrono::Duration::minutes(10);
+    for index in 0..4 {
+        request_fixture(
+            &format!("terminal-{index}"),
+            BuildRequestState::Completed,
+            (base + chrono::Duration::minutes(index)).to_rfc3339(),
+        )
+        .save()
+        .expect("save terminal request");
+    }
+    request_fixture(
+        "active-request",
+        BuildRequestState::Queued,
+        Utc::now().to_rfc3339(),
+    )
+    .save()
+    .expect("save active request");
+
+    let live = BuildRequest::load_all().expect("load live requests");
+    let live_ids = live
+        .iter()
+        .map(|request| request.request_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(live.len(), 3);
+    assert!(live_ids.contains("terminal-2"));
+    assert!(live_ids.contains("terminal-3"));
+    assert!(live_ids.contains("active-request"));
+
+    let archive = BuildRequest::requests_dir()
+        .expect("requests dir")
+        .join("archive");
+    assert!(archive.join("terminal-0.json").exists());
+    assert!(archive.join("terminal-1.json").exists());
+}
+
+#[test]
+fn optimized_test_shell_command_routes_compile_subcommands_only() {
+    let shell = SelfDevTool::optimized_test_shell_command(
+        "cargo test -p jcode-base && cargo fmt --all -- --check",
+    );
+
+    assert!(shell.contains("test|check|build|clippy|bench"));
+    assert!(shell.contains("JCODE_DEV_CARGO_SCRIPT"));
+    assert!(shell.contains("JCODE_IN_DEV_CARGO=1"));
+    assert!(shell.contains("*) command cargo \"$@\" ;;"));
+    assert!(shell.ends_with("cargo test -p jcode-base && cargo fmt --all -- --check"));
+}
+
+#[cfg(unix)]
+#[test]
+fn optimized_test_shell_command_executes_raw_cargo_test_through_wrapper() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("temp command wrapper");
+    let wrapper = temp.path().join("dev_cargo.sh");
+    let capture = temp.path().join("args.txt");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$JCODE_TEST_CAPTURE\"\n",
+    )
+    .expect("write wrapper");
+    let mut permissions = std::fs::metadata(&wrapper)
+        .expect("wrapper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, permissions).expect("make wrapper executable");
+
+    let status = std::process::Command::new("bash")
+        .args([
+            "-lc",
+            &SelfDevTool::optimized_test_shell_command("cargo test -p demo --lib"),
+        ])
+        .env("JCODE_DEV_CARGO_SCRIPT", &wrapper)
+        .env("JCODE_TEST_CAPTURE", &capture)
+        .env_remove("JCODE_IN_DEV_CARGO")
+        .status()
+        .expect("run optimized shell command");
+
+    assert!(status.success());
+    assert_eq!(
+        std::fs::read_to_string(capture).expect("captured args"),
+        "test -p demo --lib\n"
+    );
 }
 
 async fn wait_for_task_completion(task_id: &str) -> background::TaskStatusFile {

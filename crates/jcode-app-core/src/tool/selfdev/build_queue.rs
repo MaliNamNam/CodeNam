@@ -1,6 +1,25 @@
 use super::*;
 
 impl SelfDevTool {
+    pub(super) fn optimized_test_shell_command(command: &str) -> String {
+        format!(
+            r#"cargo() {{
+  case "${{1:-}}" in
+    test|check|build|clippy|bench)
+      if [[ "${{JCODE_IN_DEV_CARGO:-0}}" == "1" || -z "${{JCODE_DEV_CARGO_SCRIPT:-}}" ]]; then
+        command cargo "$@"
+      else
+        JCODE_IN_DEV_CARGO=1 "${{JCODE_DEV_CARGO_SCRIPT}}" "$@"
+      fi
+      ;;
+    *) command cargo "$@" ;;
+  esac
+}}
+export -f cargo
+{command}"#
+        )
+    }
+
     async fn append_output_line(file: &mut tokio::fs::File, line: impl AsRef<str>) {
         let _ = file.write_all(line.as_ref().as_bytes()).await;
         let _ = file.write_all(b"\n").await;
@@ -73,7 +92,11 @@ impl SelfDevTool {
     ) -> Result<TaskResult> {
         let mut cmd = tokio::process::Command::new(&command.program);
         cmd.args(&command.args)
-            .current_dir(repo_dir)
+            .current_dir(&repo_dir)
+            .env(
+                "JCODE_DEV_CARGO_SCRIPT",
+                repo_dir.join("scripts").join("dev_cargo.sh"),
+            )
             .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -907,7 +930,10 @@ impl SelfDevTool {
         let requested_source = SelfDevTool::requested_source_state(&repo_dir)?;
         let shell_command = SelfDevBuildCommand {
             program: "bash".to_string(),
-            args: vec!["-lc".to_string(), command.clone()],
+            args: vec![
+                "-lc".to_string(),
+                SelfDevTool::optimized_test_shell_command(&command),
+            ],
             display: command.clone(),
         };
         let dedupe_key = format!(

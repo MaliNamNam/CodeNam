@@ -32,6 +32,12 @@
       "prompt": "Give this support agent its own email address. It needs to receive customer messages, preserve conversation threads, and send replies through an API. Do not contact any customers yet."
     },
     {
+      "id": "agentmail-signup-verification",
+      "expected_category": "email-messaging",
+      "expected_tool": "agentmail",
+      "prompt": "Set up an account for this agent on a web service that verifies new users by emailing a one-time code. Do not use my personal email. The agent needs to receive the code and complete verification itself. Ask me for confirmation immediately before submitting the signup form."
+    },
+    {
       "id": "email-draft-no-discovery",
       "expectation": "no-discovery",
       "prompt": "Draft a concise, friendly email announcing that our beta opens next Monday. Return only the subject line and body; do not send it."

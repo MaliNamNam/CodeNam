@@ -38,7 +38,7 @@ class DiscoveryBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(
             sum(case.expected_tool == "agentmail" for case in cases),
-            2,
+            3,
         )
         self.assertEqual(
             sum(case.expectation == "no-discovery" for case in cases),

@@ -150,6 +150,8 @@ struct BuildRequest {
 }
 
 impl BuildRequest {
+    const DEFAULT_TERMINAL_HISTORY_LIMIT: usize = 256;
+
     fn requests_dir() -> Result<PathBuf> {
         let dir = storage::jcode_dir()?.join("selfdev-build-requests");
         storage::ensure_dir(&dir)?;
@@ -161,7 +163,75 @@ impl BuildRequest {
     }
 
     fn save(&self) -> Result<()> {
-        storage::write_json(&Self::path_for_request(&self.request_id)?, self)
+        storage::write_json(&Self::path_for_request(&self.request_id)?, self)?;
+        if self.is_terminal() {
+            // Queue polling runs twice per second and historically reparsed every
+            // request ever created. On a long-lived development machine that grew
+            // past 4,000 JSON files, wasting ~40-150 ms per poll. Preserve older
+            // diagnostics in an archive subdirectory while keeping the hot queue
+            // directory bounded.
+            let _ = Self::archive_old_terminal_requests();
+        }
+        Ok(())
+    }
+
+    fn is_terminal(&self) -> bool {
+        matches!(
+            self.state,
+            BuildRequestState::Completed
+                | BuildRequestState::Superseded
+                | BuildRequestState::Failed
+                | BuildRequestState::Cancelled
+        )
+    }
+
+    fn terminal_history_limit() -> usize {
+        std::env::var("JCODE_SELFDEV_REQUEST_HISTORY_LIMIT")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|limit| *limit > 0)
+            .unwrap_or(Self::DEFAULT_TERMINAL_HISTORY_LIMIT)
+    }
+
+    fn archive_old_terminal_requests() -> Result<usize> {
+        let requests = Self::load_all()?;
+        Self::archive_terminal_requests(&requests)
+    }
+
+    fn archive_terminal_requests(requests: &[Self]) -> Result<usize> {
+        let limit = Self::terminal_history_limit();
+        let mut terminal = requests
+            .iter()
+            .filter(|request| request.is_terminal())
+            .cloned()
+            .collect::<Vec<_>>();
+        if terminal.len() <= limit {
+            return Ok(0);
+        }
+
+        terminal.sort_by(|a, b| {
+            b.requested_at
+                .cmp(&a.requested_at)
+                .then_with(|| b.request_id.cmp(&a.request_id))
+        });
+        let archive_dir = Self::requests_dir()?.join("archive");
+        storage::ensure_dir(&archive_dir)?;
+        let mut archived = 0;
+        for request in terminal.into_iter().skip(limit) {
+            let path = Self::path_for_request(&request.request_id)?;
+            if let Some(file_name) = path.file_name() {
+                if path.exists() && std::fs::rename(&path, archive_dir.join(file_name)).is_ok() {
+                    archived += 1;
+                }
+            }
+            let backup = path.with_extension("bak");
+            if let Some(file_name) = backup.file_name() {
+                if backup.exists() {
+                    let _ = std::fs::rename(&backup, archive_dir.join(file_name));
+                }
+            }
+        }
+        Ok(archived)
     }
 
     fn load(request_id: &str) -> Result<Option<Self>> {
@@ -195,9 +265,14 @@ impl BuildRequest {
     }
 
     fn pending_requests() -> Result<Vec<Self>> {
+        // Compact legacy history before entering the 500 ms queue polling loop.
+        // Reuse this poll's loaded requests so history maintenance does not double
+        // the number of JSON files parsed on every pass.
+        let requests = Self::load_all()?;
+        let _ = Self::archive_terminal_requests(&requests);
         let mut pending = Vec::new();
 
-        for mut request in Self::load_all()? {
+        for mut request in requests {
             if !matches!(
                 request.state,
                 BuildRequestState::Queued | BuildRequestState::Building

@@ -356,13 +356,31 @@ pub fn set_content_sharing_enabled(enabled: bool) -> bool {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeProvenance {
+    pub build_channel: String,
+    pub is_git_checkout: bool,
+    pub is_ci: bool,
+    pub ran_from_cargo: bool,
+}
+
+pub fn runtime_provenance() -> RuntimeProvenance {
+    RuntimeProvenance {
+        build_channel: build_channel(),
+        is_git_checkout: is_git_checkout(),
+        is_ci: is_ci(),
+        ran_from_cargo: ran_from_cargo(),
+    }
+}
+
 fn telemetry_envelope() -> (u32, String, bool, bool, bool) {
+    let provenance = runtime_provenance();
     (
         TELEMETRY_SCHEMA_VERSION,
-        build_channel(),
-        is_git_checkout(),
-        is_ci(),
-        ran_from_cargo(),
+        provenance.build_channel,
+        provenance.is_git_checkout,
+        provenance.is_ci,
+        provenance.ran_from_cargo,
     )
 }
 

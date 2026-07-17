@@ -1,4 +1,4 @@
-use super::{Tool, ToolContext, ToolOutput};
+use super::{Tool, ToolContext, ToolExecutionMode, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -14,6 +14,16 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const DISCOVERY_REQUEST_ID_HEADER: &str = "x-jcode-discovery-request-id";
 const DISCOVERY_BENCHMARK_HEADER: &str = "x-jcode-discovery-benchmark";
+const DISCOVERY_SESSION_ID_HEADER: &str = "x-jcode-discovery-session-id";
+const DISCOVERY_SESSION_METADATA_HEADER: &str = "x-jcode-discovery-session-metadata";
+const DISCOVERY_SELF_DEV_HEADER: &str = "x-jcode-discovery-self-dev";
+const DISCOVERY_DEBUG_HEADER: &str = "x-jcode-discovery-debug";
+const DISCOVERY_CANARY_HEADER: &str = "x-jcode-discovery-canary";
+const DISCOVERY_EXECUTION_MODE_HEADER: &str = "x-jcode-discovery-execution-mode";
+const DISCOVERY_BUILD_CHANNEL_HEADER: &str = "x-jcode-discovery-build-channel";
+const DISCOVERY_GIT_CHECKOUT_HEADER: &str = "x-jcode-discovery-git-checkout";
+const DISCOVERY_CI_HEADER: &str = "x-jcode-discovery-ci";
+const DISCOVERY_RAN_FROM_CARGO_HEADER: &str = "x-jcode-discovery-ran-from-cargo";
 const DISCOVERY_BENCHMARK_ENV: &str = "JCODE_DISCOVERY_BENCHMARK";
 const DISCOVERY_QUERY_MIN_CHARS: usize = 20;
 const DISCOVERY_QUERY_MAX_CHARS: usize = 500;
@@ -54,6 +64,72 @@ struct DiscoveryRequestContext<'a> {
     query: &'a str,
     reason: &'a str,
     benchmark_run: bool,
+    provenance: DiscoveryRequestProvenance,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveryRequestProvenance {
+    session_id: String,
+    session_metadata_available: bool,
+    is_self_dev: bool,
+    is_debug: bool,
+    is_canary: bool,
+    execution_mode: &'static str,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
+}
+
+impl DiscoveryRequestProvenance {
+    fn from_tool_context(ctx: &ToolContext) -> Self {
+        let session = crate::session::Session::load(&ctx.session_id).ok();
+        let runtime = crate::telemetry::runtime_provenance();
+        Self {
+            session_id: ctx.session_id.clone(),
+            session_metadata_available: session.is_some(),
+            is_self_dev: session
+                .as_ref()
+                .is_some_and(|session| session.is_self_dev()),
+            is_debug: session.as_ref().is_some_and(|session| session.is_debug),
+            is_canary: session.as_ref().is_some_and(|session| session.is_canary),
+            execution_mode: match ctx.execution_mode {
+                ToolExecutionMode::AgentTurn => "agent_turn",
+                ToolExecutionMode::Direct => "direct",
+            },
+            build_channel: runtime.build_channel,
+            is_git_checkout: runtime.is_git_checkout,
+            is_ci: runtime.is_ci,
+            ran_from_cargo: runtime.ran_from_cargo,
+        }
+    }
+
+    fn apply(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        request
+            .header(DISCOVERY_SESSION_ID_HEADER, &self.session_id)
+            .header(
+                DISCOVERY_SESSION_METADATA_HEADER,
+                bool_header(self.session_metadata_available),
+            )
+            .header(DISCOVERY_SELF_DEV_HEADER, bool_header(self.is_self_dev))
+            .header(DISCOVERY_DEBUG_HEADER, bool_header(self.is_debug))
+            .header(DISCOVERY_CANARY_HEADER, bool_header(self.is_canary))
+            .header(DISCOVERY_EXECUTION_MODE_HEADER, self.execution_mode)
+            .header(DISCOVERY_BUILD_CHANNEL_HEADER, &self.build_channel)
+            .header(
+                DISCOVERY_GIT_CHECKOUT_HEADER,
+                bool_header(self.is_git_checkout),
+            )
+            .header(DISCOVERY_CI_HEADER, bool_header(self.is_ci))
+            .header(
+                DISCOVERY_RAN_FROM_CARGO_HEADER,
+                bool_header(self.ran_from_cargo),
+            )
+    }
+}
+
+fn bool_header(value: bool) -> &'static str {
+    if value { "1" } else { "0" }
 }
 
 impl fmt::Display for DiscoveryFetchError {
@@ -104,9 +180,10 @@ fn record_discovery_telemetry(
 /// Disclosure contract: some providers may share revenue with Jcode, but
 /// partnership status never influences recommendations. Every session that
 /// uses this tool renders a concise disclosure with a learn-more link on first
-/// use. The request carries only the category, a short search query, and a
-/// reason string, which the discovery service stores for transparency and
-/// reporting. It must never include session content or private information.
+/// use. The request carries the category, a short search query, a reason string,
+/// and coarse session/build provenance used to separate likely user demand from
+/// self-dev and test traffic. It never includes transcript content, file paths,
+/// credentials, or user identity.
 pub struct DiscoverToolsTool {
     client: reqwest::Client,
 }
@@ -551,7 +628,7 @@ impl Tool for DiscoverToolsTool {
         })
     }
 
-    async fn execute(&self, input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
+    async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let started_at = Instant::now();
         let request_id = uuid::Uuid::new_v4().to_string();
         let config = crate::config::config();
@@ -699,6 +776,7 @@ impl Tool for DiscoverToolsTool {
             query: &query,
             reason: &reason,
             benchmark_run,
+            provenance: DiscoveryRequestProvenance::from_tool_context(&ctx),
         };
 
         if action == DiscoveryAction::Suggest {
@@ -927,20 +1005,22 @@ async fn fetch_listing(
     tool: Option<&str>,
 ) -> std::result::Result<DiscoveryFetchResult, DiscoveryFetchError> {
     let endpoint = context.endpoint.trim_end_matches('/');
-    let mut request = context
-        .client
-        .get(endpoint)
-        .query(&[
-            ("category", context.category),
-            ("q", context.query),
-            ("reason", context.reason),
-        ])
-        .header(
-            reqwest::header::USER_AGENT,
-            format!("jcode/{}", env!("CARGO_PKG_VERSION")),
-        )
-        .header(DISCOVERY_REQUEST_ID_HEADER, context.request_id)
-        .timeout(DISCOVERY_TIMEOUT);
+    let mut request = context.provenance.apply(
+        context
+            .client
+            .get(endpoint)
+            .query(&[
+                ("category", context.category),
+                ("q", context.query),
+                ("reason", context.reason),
+            ])
+            .header(
+                reqwest::header::USER_AGENT,
+                format!("jcode/{}", env!("CARGO_PKG_VERSION")),
+            )
+            .header(DISCOVERY_REQUEST_ID_HEADER, context.request_id)
+            .timeout(DISCOVERY_TIMEOUT),
+    );
     if let Some(tool) = tool.filter(|t| !t.trim().is_empty()) {
         request = request.query(&[("tool", tool.trim())]);
     }
@@ -1001,26 +1081,28 @@ async fn submit_suggestion(
     suggestion: &ValidatedSuggestion,
 ) -> std::result::Result<DiscoveryFetchResult, DiscoveryFetchError> {
     let endpoint = format!("{}/suggestions", context.endpoint.trim_end_matches('/'));
-    let mut request = context
-        .client
-        .post(endpoint)
-        .header(
-            reqwest::header::USER_AGENT,
-            format!("jcode/{}", env!("CARGO_PKG_VERSION")),
-        )
-        .header(DISCOVERY_REQUEST_ID_HEADER, context.request_id)
-        .json(&json!({
-            "category": context.category,
-            "query": context.query,
-            "reason": context.reason,
-            "suggestion_kind": suggestion.kind,
-            "product_name": suggestion.product_name,
-            "product_url": suggestion.product_url,
-            "gap_evidence": suggestion.gap_evidence,
-            "requirements": suggestion.requirements,
-            "prior_request_id": suggestion.prior_request_id,
-        }))
-        .timeout(DISCOVERY_TIMEOUT);
+    let mut request = context.provenance.apply(
+        context
+            .client
+            .post(endpoint)
+            .header(
+                reqwest::header::USER_AGENT,
+                format!("jcode/{}", env!("CARGO_PKG_VERSION")),
+            )
+            .header(DISCOVERY_REQUEST_ID_HEADER, context.request_id)
+            .json(&json!({
+                "category": context.category,
+                "query": context.query,
+                "reason": context.reason,
+                "suggestion_kind": suggestion.kind,
+                "product_name": suggestion.product_name,
+                "product_url": suggestion.product_url,
+                "gap_evidence": suggestion.gap_evidence,
+                "requirements": suggestion.requirements,
+                "prior_request_id": suggestion.prior_request_id,
+            }))
+            .timeout(DISCOVERY_TIMEOUT),
+    );
     if context.benchmark_run {
         request = request.header(DISCOVERY_BENCHMARK_HEADER, "1");
     }
@@ -1794,6 +1876,22 @@ mod tests {
             query: "virtual card for checkout",
             reason: "task needs an online payment capability",
             benchmark_run,
+            provenance: test_provenance(),
+        }
+    }
+
+    fn test_provenance() -> DiscoveryRequestProvenance {
+        DiscoveryRequestProvenance {
+            session_id: "session-test-1".to_string(),
+            session_metadata_available: true,
+            is_self_dev: true,
+            is_debug: false,
+            is_canary: true,
+            execution_mode: "agent_turn",
+            build_channel: "selfdev".to_string(),
+            is_git_checkout: true,
+            is_ci: false,
+            ran_from_cargo: true,
         }
     }
 
@@ -1810,7 +1908,8 @@ mod tests {
 
         let request = server.await.unwrap();
         let request_line = request.lines().next().unwrap();
-        // Exactly the three disclosed parameters, nothing else.
+        // Exactly the three disclosed query parameters. Provenance is carried
+        // in bounded headers so it cannot be confused with model-authored text.
         assert!(request_line.contains("category=payments"), "{request_line}");
         assert!(request_line.contains("q=virtual"), "{request_line}");
         assert!(request_line.contains("reason=task"), "{request_line}");
@@ -1826,6 +1925,20 @@ mod tests {
                 .contains("x-jcode-discovery-benchmark: 1"),
             "{request}"
         );
+        for expected in [
+            "x-jcode-discovery-session-id: session-test-1",
+            "x-jcode-discovery-session-metadata: 1",
+            "x-jcode-discovery-self-dev: 1",
+            "x-jcode-discovery-debug: 0",
+            "x-jcode-discovery-canary: 1",
+            "x-jcode-discovery-execution-mode: agent_turn",
+            "x-jcode-discovery-build-channel: selfdev",
+            "x-jcode-discovery-git-checkout: 1",
+            "x-jcode-discovery-ci: 0",
+            "x-jcode-discovery-ran-from-cargo: 1",
+        ] {
+            assert!(request.to_ascii_lowercase().contains(expected), "{request}");
+        }
     }
 
     #[tokio::test]
@@ -1879,6 +1992,7 @@ mod tests {
             query: "manage Stripe sandbox products through scoped agent access",
             reason: "the current payment listing only provides cards and cannot manage Stripe test data",
             benchmark_run: true,
+            provenance: test_provenance(),
         };
         let result = submit_suggestion(&request, &suggestion).await.unwrap();
         assert_eq!(result.http_status, 202);
@@ -1930,6 +2044,7 @@ mod tests {
             query: "manage Stripe sandbox products through scoped agent access",
             reason: "the current payment listing only provides cards and cannot manage Stripe test data",
             benchmark_run: false,
+            provenance: test_provenance(),
         };
         let result = submit_suggestion(&request, &suggestion).await.unwrap();
         assert_eq!(result.http_status, 409);
