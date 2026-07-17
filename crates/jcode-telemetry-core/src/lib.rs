@@ -97,6 +97,7 @@ struct TurnTelemetry {
     feature_selfdev_used: bool,
     feature_background_used: bool,
     feature_subagent_used: bool,
+    feature_todo_used: bool,
     unique_mcp_servers: HashSet<String>,
     tool_cat_read_search: u32,
     tool_cat_write: u32,
@@ -110,6 +111,11 @@ struct TurnTelemetry {
     tool_cat_goal: u32,
     tool_cat_mcp: u32,
     tool_cat_other: u32,
+    tool_cat_todo: u32,
+    todo_gate_ownership_count: u32,
+    todo_gate_hill_count: u32,
+    todo_gate_completion_count: u32,
+    todo_gate_spike_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +160,7 @@ struct SessionTelemetry {
     feature_selfdev_used: bool,
     feature_background_used: bool,
     feature_subagent_used: bool,
+    feature_todo_used: bool,
     unique_mcp_servers: HashSet<String>,
     transport_https: u32,
     transport_persistent_ws_fresh: u32,
@@ -188,6 +195,11 @@ struct SessionTelemetry {
     tool_cat_goal: u32,
     tool_cat_mcp: u32,
     tool_cat_other: u32,
+    tool_cat_todo: u32,
+    todo_gate_ownership_count: u32,
+    todo_gate_hill_count: u32,
+    todo_gate_completion_count: u32,
+    todo_gate_spike_count: u32,
     command_login_used: bool,
     command_model_used: bool,
     command_usage_used: bool,
@@ -262,6 +274,7 @@ impl TurnTelemetry {
             feature_selfdev_used: false,
             feature_background_used: false,
             feature_subagent_used: false,
+            feature_todo_used: false,
             unique_mcp_servers: HashSet::new(),
             tool_cat_read_search: 0,
             tool_cat_write: 0,
@@ -275,6 +288,11 @@ impl TurnTelemetry {
             tool_cat_goal: 0,
             tool_cat_mcp: 0,
             tool_cat_other: 0,
+            tool_cat_todo: 0,
+            todo_gate_ownership_count: 0,
+            todo_gate_hill_count: 0,
+            todo_gate_completion_count: 0,
+            todo_gate_spike_count: 0,
         }
     }
 }
@@ -647,6 +665,7 @@ fn increment_tool_category(state: &mut SessionTelemetry, category: ToolCategory)
         ToolCategory::Email => state.tool_cat_email += 1,
         ToolCategory::SidePanel => state.tool_cat_side_panel += 1,
         ToolCategory::Goal => state.tool_cat_goal += 1,
+        ToolCategory::Todo => state.tool_cat_todo += 1,
         ToolCategory::Mcp => state.tool_cat_mcp += 1,
         ToolCategory::Other => state.tool_cat_other += 1,
     }
@@ -664,6 +683,7 @@ fn increment_turn_tool_category(state: &mut TurnTelemetry, category: ToolCategor
         ToolCategory::Email => state.tool_cat_email += 1,
         ToolCategory::SidePanel => state.tool_cat_side_panel += 1,
         ToolCategory::Goal => state.tool_cat_goal += 1,
+        ToolCategory::Todo => state.tool_cat_todo += 1,
         ToolCategory::Mcp => state.tool_cat_mcp += 1,
         ToolCategory::Other => state.tool_cat_other += 1,
     }
@@ -836,6 +856,12 @@ fn mark_tool_feature_usage(state: &mut SessionTelemetry, name: &str, input: &Val
             state.feature_goal_used = true;
             if let Some(turn) = state.current_turn.as_mut() {
                 turn.feature_goal_used = true;
+            }
+        }
+        "todo" | "todowrite" | "todo_write" | "todoread" | "todo_read" => {
+            state.feature_todo_used = true;
+            if let Some(turn) = state.current_turn.as_mut() {
+                turn.feature_todo_used = true;
             }
         }
         "selfdev" => {
@@ -1219,6 +1245,7 @@ fn finalize_current_turn(
         feature_selfdev_used: turn.feature_selfdev_used,
         feature_background_used: turn.feature_background_used,
         feature_subagent_used: turn.feature_subagent_used,
+        feature_todo_used: turn.feature_todo_used,
         unique_mcp_servers: turn.unique_mcp_servers.len() as u32,
         tool_cat_read_search: turn.tool_cat_read_search,
         tool_cat_write: turn.tool_cat_write,
@@ -1232,6 +1259,11 @@ fn finalize_current_turn(
         tool_cat_goal: turn.tool_cat_goal,
         tool_cat_mcp: turn.tool_cat_mcp,
         tool_cat_other: turn.tool_cat_other,
+        tool_cat_todo: turn.tool_cat_todo,
+        todo_gate_ownership_count: turn.todo_gate_ownership_count,
+        todo_gate_hill_count: turn.todo_gate_hill_count,
+        todo_gate_completion_count: turn.todo_gate_completion_count,
+        todo_gate_spike_count: turn.todo_gate_spike_count,
         workflow_chat_only,
         workflow_coding_used,
         workflow_research_used,
@@ -1591,6 +1623,7 @@ fn begin_session_with_mode(
         feature_selfdev_used: false,
         feature_background_used: false,
         feature_subagent_used: false,
+        feature_todo_used: false,
         unique_mcp_servers: HashSet::new(),
         transport_https: 0,
         transport_persistent_ws_fresh: 0,
@@ -1625,6 +1658,11 @@ fn begin_session_with_mode(
         tool_cat_goal: 0,
         tool_cat_mcp: 0,
         tool_cat_other: 0,
+        tool_cat_todo: 0,
+        todo_gate_ownership_count: 0,
+        todo_gate_hill_count: 0,
+        todo_gate_completion_count: 0,
+        todo_gate_spike_count: 0,
         command_login_used: false,
         command_model_used: false,
         command_usage_used: false,
@@ -1900,6 +1938,46 @@ pub fn record_user_cancelled() {
         observe_session_concurrency(state);
         state.user_cancelled_count = state.user_cancelled_count.saturating_add(1);
         if let Some(turn) = state.current_turn.as_mut() {
+            update_turn_activity_timestamp(turn, Instant::now());
+        }
+    }
+    maybe_emit_session_start();
+}
+
+/// Kinds of todo quality gates that can fire and block/redirect the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoGateKind {
+    /// End-to-end ownership was too low to complete a goal.
+    Ownership,
+    /// Hill-climbability was too low; the goal needs a measurable objective.
+    HillClimbability,
+    /// Completion confidence was missing or too low at wrap-up.
+    Completion,
+    /// Completion confidence rose too sharply to count as validated.
+    ConfidenceSpike,
+}
+
+/// Record a todo quality-gate firing (session- and turn-scoped counters).
+pub fn record_todo_gate(kind: TodoGateKind) {
+    if let Ok(mut guard) = SESSION_STATE.lock()
+        && let Some(ref mut state) = *guard
+    {
+        observe_session_concurrency(state);
+        let counter = match kind {
+            TodoGateKind::Ownership => &mut state.todo_gate_ownership_count,
+            TodoGateKind::HillClimbability => &mut state.todo_gate_hill_count,
+            TodoGateKind::Completion => &mut state.todo_gate_completion_count,
+            TodoGateKind::ConfidenceSpike => &mut state.todo_gate_spike_count,
+        };
+        *counter = counter.saturating_add(1);
+        if let Some(turn) = state.current_turn.as_mut() {
+            let counter = match kind {
+                TodoGateKind::Ownership => &mut turn.todo_gate_ownership_count,
+                TodoGateKind::HillClimbability => &mut turn.todo_gate_hill_count,
+                TodoGateKind::Completion => &mut turn.todo_gate_completion_count,
+                TodoGateKind::ConfidenceSpike => &mut turn.todo_gate_spike_count,
+            };
+            *counter = counter.saturating_add(1);
             update_turn_activity_timestamp(turn, Instant::now());
         }
     }

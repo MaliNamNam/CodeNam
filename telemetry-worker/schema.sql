@@ -231,6 +231,14 @@ CREATE TABLE IF NOT EXISTS session_details (
     tool_cat_goal INTEGER DEFAULT 0,
     tool_cat_mcp INTEGER DEFAULT 0,
     tool_cat_other INTEGER DEFAULT 0,
+    -- Todo tool telemetry (migration 0021). The events table is at D1's
+    -- column cap, so session-level todo fields live here.
+    tool_cat_todo INTEGER DEFAULT 0,
+    feature_todo_used INTEGER DEFAULT 0,
+    todo_gate_ownership_count INTEGER DEFAULT 0,
+    todo_gate_hill_count INTEGER DEFAULT 0,
+    todo_gate_completion_count INTEGER DEFAULT 0,
+    todo_gate_spike_count INTEGER DEFAULT 0,
     command_login_used INTEGER DEFAULT 0,
     command_model_used INTEGER DEFAULT 0,
     command_usage_used INTEGER DEFAULT 0,
@@ -313,6 +321,13 @@ CREATE TABLE IF NOT EXISTS turn_details (
     tool_cat_goal INTEGER DEFAULT 0,
     tool_cat_mcp INTEGER DEFAULT 0,
     tool_cat_other INTEGER DEFAULT 0,
+    -- Todo tool telemetry (migration 0021).
+    tool_cat_todo INTEGER DEFAULT 0,
+    feature_todo_used INTEGER DEFAULT 0,
+    todo_gate_ownership_count INTEGER DEFAULT 0,
+    todo_gate_hill_count INTEGER DEFAULT 0,
+    todo_gate_completion_count INTEGER DEFAULT 0,
+    todo_gate_spike_count INTEGER DEFAULT 0,
     workflow_chat_only INTEGER DEFAULT 0,
     workflow_coding_used INTEGER DEFAULT 0,
     workflow_research_used INTEGER DEFAULT 0,

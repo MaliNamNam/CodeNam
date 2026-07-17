@@ -146,8 +146,9 @@ carry `x-jcode-discovery-benchmark: 1`, and the corresponding telemetry event ha
 | `input_tokens` / `output_tokens` | `12345` / `678` | Session-level provider-reported token usage totals |
 | `cache_read_input_tokens` / `cache_creation_input_tokens` | `9000` / `1200` | Session-level provider-reported prompt-cache token totals when available |
 | `total_tokens` | `23223` | Sum of input, output, cache-read, and cache-creation tokens |
-| `feature_*_used` | `true/false` | Whether a feature family was used (memory, swarm, web, email, MCP, side panel, goals, selfdev, background, subagents) |
-| `tool_cat_*` | `0..N` | Coarse tool category counts (read/search, write, shell, web, memory, subagent, swarm, email, side-panel, goal, MCP, other) |
+| `feature_*_used` | `true/false` | Whether a feature family was used (memory, swarm, web, email, MCP, side panel, goals, todos, selfdev, background, subagents) |
+| `tool_cat_*` | `0..N` | Coarse tool category counts (read/search, write, shell, web, memory, subagent, swarm, email, side-panel, goal, todo, MCP, other) |
+| `todo_gate_*_count` | `0..N` | How often todo quality gates fired in-session (end-to-end ownership, hill-climbability, completion confidence, confidence spike) |
 | `command_*_used` | `true/false` | Whether a slash-command family was used in-session |
 | `workflow_*_used` | `true/false` | Whether the session looked like coding, research, testing, background, subagent, or swarm work |
 | `unique_mcp_servers` | `2` | Count of distinct MCP servers touched in-session |
@@ -211,6 +212,7 @@ This is a privacy-safe per-prompt summary event. It contains no prompt text, no 
 | `total_tokens` | `9980` | Sum of input, output, cache-read, and cache-creation tokens for the turn |
 | `feature_*_used` | `true/false` | Which feature families were touched in the turn |
 | `tool_cat_*` | `0..N` | Tool category mix for the turn |
+| `todo_gate_*_count` | `0..N` | Todo quality gates fired during the turn |
 | `workflow_*_used` | `true/false` | What kind of workflow this turn looked like |
 | `turn_success` | `true` | Whether the turn produced a useful response/outcome |
 | `turn_abandoned` | `false` | Whether the turn appears to have ended without success |

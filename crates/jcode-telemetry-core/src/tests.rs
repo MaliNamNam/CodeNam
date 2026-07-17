@@ -313,6 +313,7 @@ fn test_session_end_event_serialization() {
         feature_selfdev_used: false,
         feature_background_used: false,
         feature_subagent_used: true,
+        feature_todo_used: false,
         unique_mcp_servers: 2,
         session_success: true,
         abandoned_before_response: false,
@@ -352,6 +353,11 @@ fn test_session_end_event_serialization() {
         tool_cat_goal: 0,
         tool_cat_mcp: 1,
         tool_cat_other: 0,
+        tool_cat_todo: 0,
+        todo_gate_ownership_count: 0,
+        todo_gate_hill_count: 0,
+        todo_gate_completion_count: 0,
+        todo_gate_spike_count: 0,
         command_login_used: false,
         command_model_used: true,
         command_usage_used: false,
@@ -455,6 +461,45 @@ fn test_record_token_usage_aggregates_session_and_turn() {
         assert_eq!(turn.cache_read_input_tokens, 200);
         assert_eq!(turn.cache_creation_input_tokens, 12);
         assert_eq!(turn.total_tokens, 392);
+    }
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+}
+
+#[test]
+fn test_record_todo_tool_and_gates_aggregate_session_and_turn() {
+    let _guard = lock_telemetry_test_state();
+    if let Ok(mut session) = SESSION_STATE.lock() {
+        *session = None;
+    }
+    begin_session_with_mode("openai", "gpt-5.4", None, false);
+    record_turn();
+    record_tool_execution("todo", &serde_json::json!({}), true, 5);
+    record_tool_execution("todo", &serde_json::json!({}), true, 5);
+    record_todo_gate(TodoGateKind::Ownership);
+    record_todo_gate(TodoGateKind::HillClimbability);
+    record_todo_gate(TodoGateKind::Completion);
+    record_todo_gate(TodoGateKind::ConfidenceSpike);
+    record_todo_gate(TodoGateKind::HillClimbability);
+
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.tool_cat_todo, 2);
+        assert!(state.feature_todo_used);
+        assert_eq!(state.tool_cat_other, 0);
+        assert_eq!(state.todo_gate_ownership_count, 1);
+        assert_eq!(state.todo_gate_hill_count, 2);
+        assert_eq!(state.todo_gate_completion_count, 1);
+        assert_eq!(state.todo_gate_spike_count, 1);
+        let turn = state.current_turn.as_ref().expect("current turn");
+        assert_eq!(turn.tool_cat_todo, 2);
+        assert!(turn.feature_todo_used);
+        assert_eq!(turn.todo_gate_ownership_count, 1);
+        assert_eq!(turn.todo_gate_hill_count, 2);
+        assert_eq!(turn.todo_gate_completion_count, 1);
+        assert_eq!(turn.todo_gate_spike_count, 1);
     }
     if let Ok(mut session) = SESSION_STATE.lock() {
         *session = None;

@@ -116,6 +116,28 @@ function makeDb(plan = {}) {
               ].map((name) => ({ name })),
             };
           }
+          if (/table_info\(session_details\)/.test(sql)) {
+            return {
+              results: [
+                "event_id", "max_concurrent_sessions", "multi_sessioned",
+                "tool_cat_read_search", "tool_cat_write", "tool_cat_other",
+                "tool_cat_todo", "feature_todo_used",
+                "todo_gate_ownership_count", "todo_gate_hill_count",
+                "todo_gate_completion_count", "todo_gate_spike_count",
+              ].map((name) => ({ name })),
+            };
+          }
+          if (/table_info\(turn_details\)/.test(sql)) {
+            return {
+              results: [
+                "event_id", "turn_index", "turn_success",
+                "tool_cat_read_search", "tool_cat_write", "tool_cat_other",
+                "tool_cat_todo", "feature_todo_used",
+                "todo_gate_ownership_count", "todo_gate_hill_count",
+                "todo_gate_completion_count", "todo_gate_spike_count",
+              ].map((name) => ({ name })),
+            };
+          }
           if (/table_info/.test(sql)) {
             return {
               results: [
@@ -154,6 +176,14 @@ function makeCtx() {
   };
 }
 
+// Position of `column` in an `INSERT ... (col1, col2, ...) VALUES` statement,
+// matching the bound values array. Returns -1 when the column is absent.
+function columnIndex(sql, column) {
+  const match = sql.match(/\(([^)]+)\)\s*VALUES/i);
+  if (!match) return -1;
+  return match[1].split(",").map((name) => name.trim()).indexOf(column);
+}
+
 test("event is dual-written: firehose point + D1 insert", async () => {
   const db = makeDb();
   const firehose = makeFirehose();
@@ -180,6 +210,70 @@ test("event is dual-written: firehose point + D1 insert", async () => {
   assert.equal(point.doubles.length, 20);
 
   assert.ok(db.executed.some(({ sql }) => /INSERT OR IGNORE INTO events/.test(sql)));
+});
+
+test("session_end persists todo telemetry into session_details", async () => {
+  const db = makeDb();
+  const response = await worker.fetch(
+    postRequest(makeBody({
+      event: "session_end",
+      event_id: "session-end-1",
+      session_id: "session-1",
+      tool_cat_todo: 4,
+      feature_todo_used: true,
+      todo_gate_ownership_count: 1,
+      todo_gate_hill_count: 2,
+      todo_gate_completion_count: 1,
+      todo_gate_spike_count: 1,
+    })),
+    { DB: db },
+    makeCtx(),
+  );
+  assert.equal(response.status, 200);
+  const detailInsert = db.executed.find(({ sql }) => /INSERT OR IGNORE INTO session_details/.test(sql));
+  assert.ok(detailInsert, "session_details insert should run");
+  for (const [column, expected] of [
+    ["tool_cat_todo", 4],
+    ["feature_todo_used", 1],
+    ["todo_gate_ownership_count", 1],
+    ["todo_gate_hill_count", 2],
+    ["todo_gate_completion_count", 1],
+    ["todo_gate_spike_count", 1],
+  ]) {
+    const idx = columnIndex(detailInsert.sql, column);
+    assert.ok(idx >= 0, `${column} should be inserted`);
+    assert.equal(detailInsert.values[idx], expected, column);
+  }
+});
+
+test("turn_end persists todo telemetry into turn_details", async () => {
+  const db = makeDb();
+  const response = await worker.fetch(
+    postRequest(makeBody({
+      event: "turn_end",
+      event_id: "turn-end-1",
+      session_id: "session-1",
+      turn_index: 2,
+      tool_cat_todo: 2,
+      feature_todo_used: true,
+      todo_gate_hill_count: 1,
+    })),
+    { DB: db },
+    makeCtx(),
+  );
+  assert.equal(response.status, 200);
+  const detailInsert = db.executed.find(({ sql }) => /INSERT OR IGNORE INTO turn_details/.test(sql));
+  assert.ok(detailInsert, "turn_details insert should run");
+  for (const [column, expected] of [
+    ["tool_cat_todo", 2],
+    ["feature_todo_used", 1],
+    ["todo_gate_hill_count", 1],
+    ["todo_gate_ownership_count", 0],
+  ]) {
+    const idx = columnIndex(detailInsert.sql, column);
+    assert.ok(idx >= 0, `${column} should be inserted`);
+    assert.equal(detailInsert.values[idx], expected, column);
+  }
 });
 
 test("discovery event is validated, firehosed, and persisted to details", async () => {
