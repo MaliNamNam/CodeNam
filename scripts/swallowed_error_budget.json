@@ -2,8 +2,8 @@
   "total": 3032,
   "totals_by_pattern": {
     "dot_ok": 1102,
-    "let_underscore": 1134,
-    "unwrap_or_default": 796
+    "let_underscore": 1136,
+    "unwrap_or_default": 794
   },
   "tracked_files": {
     "crates/jcode-app-core/src/agent.rs": {
@@ -1603,8 +1603,8 @@
     },
     "crates/jcode-setup-hints/src/windows_setup.rs": {
       "dot_ok": 1,
-      "let_underscore": 12,
-      "unwrap_or_default": 6
+      "let_underscore": 11,
+      "unwrap_or_default": 4
     },
     "crates/jcode-storage/src/active_pids.rs": {
       "dot_ok": 14,
@@ -2018,7 +2018,7 @@
     },
     "crates/jcode-tui/src/tui/app/turn.rs": {
       "dot_ok": 0,
-      "let_underscore": 11,
+      "let_underscore": 14,
       "unwrap_or_default": 2
     },
     "crates/jcode-tui/src/tui/app/turn_memory.rs": {

@@ -17,7 +17,7 @@
     "crates/jcode-provider-anthropic-runtime/src/anthropic_tests.rs": 1783,
     "crates/jcode-provider-openrouter-runtime/src/openrouter_tests.rs": 2766,
     "crates/jcode-tui/src/tui/app/tests.rs": 1610,
-    "crates/jcode-tui/src/tui/app/tests/commands_accounts_01/part_01.rs": 1607,
+    "crates/jcode-tui/src/tui/app/tests/commands_accounts_01/part_01.rs": 1610,
     "crates/jcode-tui/src/tui/app/tests/onboarding_eval.rs": 3302,
     "crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs": 1606,
     "crates/jcode-tui/src/tui/app/tests/remote_events_reload_01/part_01.rs": 1808,
