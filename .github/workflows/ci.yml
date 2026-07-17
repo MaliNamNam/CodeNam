@@ -305,7 +305,7 @@ jobs:
           & ./scripts/invoke_cargo_with_timeout.ps1 `
             -Name 'Windows power-inhibit tests' `
             -TimeoutSeconds 900 `
-            -CargoArgs @('test', '--locked', '--target', 'x86_64-pc-windows-msvc', '-p', 'jcode-base', '--lib', 'power_inhibit::tests::windows_', '--', '--nocapture')
+            -CargoArgs @('test', '--locked', '--target', 'x86_64-pc-windows-msvc', '-p', 'jcode-base', '--no-default-features', '--lib', 'power_inhibit::tests::windows_', '--', '--nocapture')
 
       - name: Run Windows e2e smoke tests
         shell: pwsh
@@ -369,7 +369,9 @@ jobs:
             throw 'Could not determine Cargo.toml version'
           }
 
-          $version = 'v' + $cargoVersion.Matches[0].Groups[1].Value
+          # CI builds are development builds. Build metadata independently derives
+          # this identity from the root package version and appends `-dev`.
+          $version = 'v' + $cargoVersion.Matches[0].Groups[1].Value + '-dev'
           & ./.github/scripts/verify_windows_install.ps1 `
             -ArtifactExePath 'target/x86_64-pc-windows-msvc/release/jcode.exe' `
             -Version $version
