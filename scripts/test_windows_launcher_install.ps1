@@ -77,6 +77,12 @@ try {
     Set-Content -LiteralPath $freshProfileBinary -Value "@echo off`r`n>&2 echo jcode collects anonymous usage statistics.`r`necho jcode v0.47.0 (f7f5898c)" -NoNewline
     Assert-Equal 'v0.47.0' (Get-JcodeVersionFromBinary $freshProfileBinary) 'binary version probe should tolerate a successful fresh-profile telemetry notice on stderr'
 
+    Write-Host 'test_windows_architecture_detection_prefers_native_arm64'
+    Assert-Equal 'jcode-windows-x86_64' (Resolve-JcodeWindowsArtifact @('X64', 'AMD64')) 'x64 Windows should select the x64 release asset'
+    Assert-Equal 'jcode-windows-aarch64' (Resolve-JcodeWindowsArtifact @('Arm64')) 'native ARM64 Windows should select the ARM64 release asset'
+    Assert-Equal 'jcode-windows-aarch64' (Resolve-JcodeWindowsArtifact @('X64', 'AMD64', 'ARM64')) 'emulated x64 PowerShell on Windows ARM64 should prefer the native ARM64 release asset'
+    Assert-Equal $null (Resolve-JcodeWindowsArtifact @('x86', 'unknown')) 'unsupported architectures should not silently select an asset'
+
     Write-Host 'test_release_checksum_validation'
     $checksumFile = Join-Path $testRoot 'checksum.bin'
     Set-Content -LiteralPath $checksumFile -Value 'known-content' -NoNewline
@@ -91,6 +97,8 @@ try {
         $checksumThrew = $true
     }
     Assert-Equal $true $checksumThrew 'checksum validation should reject a mismatched digest'
+    $armManifest = "$digest  nested/path/jcode-windows-aarch64.exe"
+    Assert-Equal $digest (Get-JcodeSha256FromManifest -ManifestText $armManifest -AssetName 'jcode-windows-aarch64.exe') 'checksum parser should match the Windows ARM64 release asset'
 
     Write-Host 'test_optional_setup_and_source_build_are_opt_in'
     Assert-Equal $false ([bool]$ConfigureAlacritty) 'core install should not install an optional terminal by default'

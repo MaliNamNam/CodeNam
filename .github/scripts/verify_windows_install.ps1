@@ -8,6 +8,13 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $resolvedArtifact = (Resolve-Path -LiteralPath $ArtifactExePath).Path
+$originalUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$originalEnvironment = @{
+    LOCALAPPDATA = $env:LOCALAPPDATA
+    APPDATA = $env:APPDATA
+    USERPROFILE = $env:USERPROFILE
+    JCODE_HOME = $env:JCODE_HOME
+}
 
 if (-not $Version) {
     $artifactVersionOutput = & $resolvedArtifact --version
@@ -24,13 +31,15 @@ if (-not $Version) {
     $Version = 'v' + (($Version.Trim()) -replace '^[vV]', '')
 }
 
-$tempRoot = Join-Path $env:RUNNER_TEMP ("jcode-windows-install-verify-" + [guid]::NewGuid().ToString('N'))
+$tempBase = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+$tempRoot = Join-Path $tempBase ("jcode-windows-install-verify-" + [guid]::NewGuid().ToString('N'))
 $localAppData = Join-Path $tempRoot 'localappdata'
 $appData = Join-Path $tempRoot 'appdata'
 $userProfile = Join-Path $tempRoot 'userprofile'
 $jcodeHome = Join-Path $tempRoot '.jcode'
 $installDir = Join-Path $localAppData 'jcode\bin'
 
+try {
 New-Item -ItemType Directory -Force -Path $localAppData, $appData, $userProfile, $jcodeHome | Out-Null
 
 $env:LOCALAPPDATA = $localAppData
@@ -117,3 +126,18 @@ if (Test-Path -LiteralPath $legacyVbs) {
 }
 
 Write-Host "Windows install verification passed for $Version" -ForegroundColor Green
+} finally {
+    # The installer intentionally persists PATH in HKCU. This verifier uses an
+    # isolated filesystem profile, so always restore the caller's actual user
+    # PATH and environment even if one of the lifecycle assertions fails.
+    [Environment]::SetEnvironmentVariable('Path', $originalUserPath, 'User')
+    foreach ($name in $originalEnvironment.Keys) {
+        $value = $originalEnvironment[$name]
+        if ($null -eq $value) {
+            Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            Set-Item -Path "Env:$name" -Value $value
+        }
+    }
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+}

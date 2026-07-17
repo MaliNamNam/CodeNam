@@ -9,9 +9,9 @@ mkdir -p "$tmp/bin" "$tmp/home" "$tmp/install"
 cat > "$tmp/bin/uname" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
-  -s) printf 'Linux\n' ;;
-  -m) printf 'x86_64\n' ;;
-  *) printf 'Linux\n' ;;
+  -s) printf '%s\n' "${TEST_UNAME_S:-Linux}" ;;
+  -m) printf '%s\n' "${TEST_UNAME_M:-x86_64}" ;;
+  *) printf '%s\n' "${TEST_UNAME_S:-Linux}" ;;
 esac
 EOF
 
@@ -28,6 +28,7 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+[ -z "${DOWNLOAD_URL_LOG:-}" ] || printf '%s\n' "$url" >> "$DOWNLOAD_URL_LOG"
 case "$url" in
   *telemetry.jcode.sh*) printf '%s\n' "$payload" >> "$INSTALL_TELEMETRY_LOG" ;;
   *api.github.com*)
@@ -51,14 +52,15 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
-cat > "$dest/jcode-linux-x86_64" <<'BIN'
+artifact="${TEST_ARCHIVE_ARTIFACT:-jcode-linux-x86_64}"
+cat > "$dest/$artifact" <<'BIN'
 #!/usr/bin/env bash
 if [ "${1:-}" = "--version" ]; then printf 'jcode 1.2.3\n'; fi
 if [ "${1:-}" = "setup-hotkey" ] && [ -n "${HOTKEY_SETUP_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$HOTKEY_SETUP_LOG"
 fi
 BIN
-chmod +x "$dest/jcode-linux-x86_64"
+chmod +x "$dest/$artifact"
 EOF
 chmod +x "$tmp/bin/uname" "$tmp/bin/curl" "$tmp/bin/tar"
 
@@ -79,6 +81,26 @@ test "$(cat "$tmp/home/.jcode/install_conversion_id")" = "$conversion_id"
 grep -q '"stage":"installer_start".*"outcome":"success"' "$telemetry_log"
 grep -q '"stage":"installer_finish".*"outcome":"success"' "$telemetry_log"
 test "$(cat "$hotkey_setup_log")" = "setup-hotkey"
+
+# Git for Windows can be x64-emulated on Windows ARM64. In that case uname -m
+# reports x86_64 while PROCESSOR_ARCHITEW6432 exposes the native ARM64 OS.
+windows_url_log="$tmp/windows-arm64-urls.log"
+PATH="$tmp/bin:$PATH" \
+HOME="$tmp/home-windows-arm64" \
+LOCALAPPDATA="$tmp/localappdata-windows-arm64" \
+JCODE_HOME="$tmp/home-windows-arm64/.jcode" \
+JCODE_INSTALL_DIR="$tmp/install-windows-arm64" \
+JCODE_SKIP_SERVER_RELOAD=1 \
+JCODE_NO_TELEMETRY=1 \
+TEST_UNAME_S=MINGW64_NT-10.0 \
+TEST_UNAME_M=x86_64 \
+PROCESSOR_ARCHITECTURE=AMD64 \
+PROCESSOR_ARCHITEW6432=ARM64 \
+TEST_ARCHIVE_ARTIFACT=jcode-windows-aarch64.exe \
+DOWNLOAD_URL_LOG="$windows_url_log" \
+bash "$repo_dir/scripts/install.sh" >/dev/null
+grep -q '/jcode-windows-aarch64.tar.gz$' "$windows_url_log"
+test -x "$tmp/install-windows-arm64/jcode.exe"
 
 failure_log="$tmp/failure.jsonl"
 if PATH="$tmp/bin:$PATH" \

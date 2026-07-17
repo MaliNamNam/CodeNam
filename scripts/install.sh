@@ -96,10 +96,25 @@ case "$OS" in
     ;;
   MINGW*|MSYS*|CYGWIN*)
     IS_WINDOWS=true
-    case "$ARCH" in
-      x86_64|AMD64)  ARTIFACT="jcode-windows-x86_64" ;;
-      aarch64|arm64|ARM64) ARTIFACT="jcode-windows-aarch64" ;;
-      *)       err "Unsupported Windows architecture: $ARCH" ;;
+    WINDOWS_ARCH=""
+    # Git for Windows may itself be an emulated x64 process on Windows ARM64,
+    # making `uname -m` report x86_64. Prefer any ARM64 OS environment signal.
+    for candidate in "${PROCESSOR_ARCHITEW6432:-}" "${PROCESSOR_ARCHITECTURE:-}" "$ARCH"; do
+      case "$candidate" in
+        aarch64|AARCH64|arm64|Arm64|ARM64) WINDOWS_ARCH="aarch64"; break ;;
+      esac
+    done
+    if [ -z "$WINDOWS_ARCH" ]; then
+      for candidate in "${PROCESSOR_ARCHITEW6432:-}" "${PROCESSOR_ARCHITECTURE:-}" "$ARCH"; do
+        case "$candidate" in
+          x86_64|X64|AMD64) WINDOWS_ARCH="x86_64"; break ;;
+        esac
+      done
+    fi
+    case "$WINDOWS_ARCH" in
+      x86_64) ARTIFACT="jcode-windows-x86_64" ;;
+      aarch64) ARTIFACT="jcode-windows-aarch64" ;;
+      *) err "Unsupported Windows architecture: $ARCH" ;;
     esac
     ;;
   *)

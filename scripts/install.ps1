@@ -762,7 +762,7 @@ function Get-JcodeHotkeyShortcutScript([string]$StartupShortcutPath, [string]$Jc
         "`$shortcut = `$shell.CreateShortcut('$escapedShortcutPath')",
         "`$shortcut.TargetPath = 'powershell.exe'",
         "`$shortcut.Arguments = '$escapedListenerArguments'",
-        "`$shortcut.Description = 'jcode Win+Shift+F23 hotkey listener'",
+        "`$shortcut.Description = 'jcode global launch hotkey listener'",
         '$shortcut.WindowStyle = 7',
         '$shortcut.Save()',
         "Write-Output 'OK'"
@@ -786,7 +786,7 @@ function Install-JcodeHotkey([string]$JcodeExePath) {
 
     if ($env:JCODE_WINDOWS_SETUP_SKIP_EXTERNALS -eq "1") {
         Set-Content -Path (Join-Path $HotkeyDir "jcode-hotkey-shortcut.ps1") -Value $shortcutScript -Encoding UTF8
-        Write-Info "Configured Win+Shift+F23 (Copilot key) to launch jcode"
+        Write-Info "Configured Alt+; and the Copilot key to launch jcode"
         return $true
     }
 
@@ -803,9 +803,24 @@ function Install-JcodeHotkey([string]$JcodeExePath) {
         Write-Warn "Hotkey will start on next login, but could not be launched immediately"
     }
 
-    Write-Info "Configured Win+Shift+F23 (Copilot key) to launch jcode"
+    Write-Info "Configured Alt+; and the Copilot key to launch jcode"
     return $true
 }
+function Resolve-JcodeWindowsArtifact([string[]]$ArchitectureCandidates) {
+    $sawX64 = $false
+
+    foreach ($arch in @($ArchitectureCandidates)) {
+        if (-not $arch) { continue }
+        switch -Regex ($arch.Trim()) {
+            '^(Arm64|ARM64|AARCH64|aarch64)$' { return "jcode-windows-aarch64" }
+            '^(X64|AMD64|x86_64)$' { $sawX64 = $true }
+        }
+    }
+
+    if ($sawX64) { return "jcode-windows-x86_64" }
+    return $null
+}
+
 function Get-JcodeWindowsArtifact {
     $candidates = @()
 
@@ -818,12 +833,8 @@ function Get-JcodeWindowsArtifact {
         if ($envArch) { $candidates += [string]$envArch }
     }
 
-    foreach ($arch in $candidates) {
-        switch -Regex ($arch.Trim()) {
-            '^(X64|AMD64|x86_64)$' { return "jcode-windows-x86_64" }
-            '^(Arm64|ARM64|AARCH64|aarch64)$' { return "jcode-windows-aarch64" }
-        }
-    }
+    $artifact = Resolve-JcodeWindowsArtifact $candidates
+    if ($artifact) { return $artifact }
 
     $displayArch = if ($candidates.Count -gt 0) { $candidates -join ", " } else { "<unknown>" }
     Write-Err "Unsupported architecture: $displayArch (supported: x86_64, ARM64)"

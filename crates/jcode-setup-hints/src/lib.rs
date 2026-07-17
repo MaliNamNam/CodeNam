@@ -1,6 +1,6 @@
 //! Platform setup hints shown on startup.
 //!
-//! - Windows: suggest native Win+Shift+F23/Copilot-key hotkey setup and terminal setup.
+//! - Windows: suggest native Alt launch hotkeys plus Copilot-key setup and terminal setup.
 //! - macOS: if the user is on the default built-in Terminal.app, show a one-time
 //!   notice that it renders jcode poorly and suggest a modern terminal (Ghostty).
 //! - Linux: create a .desktop launcher file.

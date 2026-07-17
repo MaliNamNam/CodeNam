@@ -71,8 +71,8 @@ pub(super) fn find_alacritty_path() -> Option<String> {
 }
 
 /// Resolve the `[launch_hotkeys]` config into Windows listener entries.
-/// Empty config uses the Windows Copilot-key chord (Win+Shift+F23), which is
-/// what current Copilot keyboards emit when their key is pressed.
+/// Empty config keeps the shared macOS/Linux launch layout (mapped to Alt on
+/// Windows) and adds the native Copilot-key chord (Win+Shift+F23).
 fn resolve_windows_hotkeys() -> Vec<WindowsHotkey> {
     let config = effective_windows_launch_hotkeys_config();
     if config.enabled == Some(false) {
@@ -116,12 +116,14 @@ pub(super) fn primary_hotkey_display() -> Option<(String, String)> {
 }
 
 fn default_windows_launch_entries() -> Vec<LaunchHotkeyEntry> {
-    vec![LaunchHotkeyEntry {
+    let mut entries = crate::launch_hotkeys::default_launch_entries();
+    entries.push(LaunchHotkeyEntry {
         chord: "win+shift+f23".to_string(),
         dir: "$HOME".to_string(),
         label: "home".to_string(),
         self_dev: false,
-    }]
+    });
+    entries
 }
 fn effective_windows_launch_hotkeys_config() -> LaunchHotkeysConfig {
     let mut config = super::load_launch_hotkeys_config();
@@ -192,7 +194,7 @@ $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut({shortcut_path})
 $shortcut.TargetPath = 'powershell.exe'
 $shortcut.Arguments = {listener_arguments}
-$shortcut.Description = 'jcode Win+Shift+F23 hotkey listener'
+$shortcut.Description = 'jcode global launch hotkey listener'
 $shortcut.WindowStyle = 7
 $shortcut.Save()
 Write-Output 'OK'
@@ -338,13 +340,71 @@ fn wide_null(text: &str) -> Vec<u16> {
 }
 
 #[cfg(windows)]
+const COPILOT_HOOK_MESSAGE: u32 = 0x8000 + 0x4A;
+#[cfg(windows)]
+static COPILOT_HOOK_THREAD_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(windows)]
+static COPILOT_F23_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Capture the physical Copilot key even when Windows Shell reserves
+/// Win+Shift+F23 and rejects `RegisterHotKey`. The hook only posts a private
+/// message to the listener thread; terminal launch work stays outside the hook.
+#[cfg(windows)]
+unsafe extern "system" fn copilot_keyboard_hook(
+    code: i32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_F23, VK_LWIN, VK_RWIN, VK_SHIFT,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, KBDLLHOOKSTRUCT, PostThreadMessageW, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+        WM_SYSKEYUP,
+    };
+
+    if code >= 0 {
+        let event = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        if event.vkCode == u32::from(VK_F23) {
+            let message = wparam as u32;
+            if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
+                let win_down = unsafe { GetAsyncKeyState(i32::from(VK_LWIN)) } < 0
+                    || unsafe { GetAsyncKeyState(i32::from(VK_RWIN)) } < 0;
+                let shift_down = unsafe { GetAsyncKeyState(i32::from(VK_SHIFT)) } < 0;
+                if win_down && shift_down {
+                    let first_press = !COPILOT_F23_HELD.swap(true, Ordering::Relaxed);
+                    if first_press {
+                        let thread_id = COPILOT_HOOK_THREAD_ID.load(Ordering::Relaxed);
+                        if thread_id != 0 {
+                            unsafe {
+                                PostThreadMessageW(thread_id, COPILOT_HOOK_MESSAGE, 0, 0);
+                            }
+                        }
+                    }
+                    return 1;
+                }
+            } else if (message == WM_KEYUP || message == WM_SYSKEYUP)
+                && COPILOT_F23_HELD.swap(false, Ordering::Relaxed)
+            {
+                return 1;
+            }
+        }
+    }
+
+    unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
+}
+
+#[cfg(windows)]
 fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentThreadId};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetMessageW, MSG, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_HOTKEY,
+    };
 
     const MUTEX_NAME: &str = "Local\\JcodeLaunchHotkeyListener";
 
@@ -361,11 +421,16 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
     }
 
     let mut registered: Vec<(i32, WindowsHotkey)> = Vec::new();
+    let mut copilot_entry: Option<(i32, WindowsHotkey)> = None;
     for (index, entry) in entries.into_iter().enumerate() {
         let Some((mods, vk)) = windows_hotkeys::hotkey_to_win32(&entry) else {
             continue;
         };
         let id = 0x4A00_i32 + index as i32;
+        if windows_hotkeys::is_copilot_hotkey(&entry) {
+            copilot_entry = Some((id, entry));
+            continue;
+        }
         let ok = unsafe { RegisterHotKey(std::ptr::null_mut(), id, mods | MOD_NOREPEAT, vk) } != 0;
         if ok {
             registered.push((id, entry));
@@ -377,7 +442,32 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
         }
     }
 
-    if registered.is_empty() {
+    let mut copilot_hook = std::ptr::null_mut();
+    if copilot_entry.is_some() {
+        COPILOT_HOOK_THREAD_ID.store(
+            unsafe { GetCurrentThreadId() },
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        COPILOT_F23_HELD.store(false, std::sync::atomic::Ordering::Relaxed);
+        copilot_hook = unsafe {
+            SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(copilot_keyboard_hook),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if copilot_hook.is_null() {
+            jcode_logging::warn(&format!(
+                "failed to install Windows Copilot-key hook: {}",
+                std::io::Error::last_os_error()
+            ));
+            COPILOT_HOOK_THREAD_ID.store(0, std::sync::atomic::Ordering::Relaxed);
+            copilot_entry = None;
+        }
+    }
+
+    if registered.is_empty() && copilot_entry.is_none() {
         unsafe {
             CloseHandle(mutex);
         }
@@ -387,20 +477,25 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
     let result = (|| -> Result<()> {
         let mut msg: MSG = unsafe { std::mem::zeroed() };
         loop {
-            let rc = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), WM_HOTKEY, WM_HOTKEY) };
+            let rc = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
             if rc == 0 {
                 break;
             }
             if rc < 0 {
                 return Err(std::io::Error::last_os_error()).context("GetMessageW failed");
             }
-            if msg.message != WM_HOTKEY {
-                continue;
-            }
-            let id = msg.wParam as i32;
-            if let Some((_, entry)) = registered
-                .iter()
-                .find(|(registered_id, _)| *registered_id == id)
+            let entry = if msg.message == WM_HOTKEY {
+                let id = msg.wParam as i32;
+                registered
+                    .iter()
+                    .find(|(registered_id, _)| *registered_id == id)
+                    .map(|(_, entry)| entry)
+            } else if msg.message == COPILOT_HOOK_MESSAGE {
+                copilot_entry.as_ref().map(|(_, entry)| entry)
+            } else {
+                None
+            };
+            if let Some(entry) = entry
                 && let Err(err) = launch_windows_hotkey(entry)
             {
                 jcode_logging::warn(&format!(
@@ -416,6 +511,13 @@ fn windows_native_hotkey_loop(entries: Vec<WindowsHotkey>) -> Result<()> {
             UnregisterHotKey(std::ptr::null_mut(), *id);
         }
     }
+    if !copilot_hook.is_null() {
+        unsafe {
+            UnhookWindowsHookEx(copilot_hook);
+        }
+    }
+    COPILOT_HOOK_THREAD_ID.store(0, std::sync::atomic::Ordering::Relaxed);
+    COPILOT_F23_HELD.store(false, std::sync::atomic::Ordering::Relaxed);
     unsafe {
         CloseHandle(mutex);
     }
@@ -529,7 +631,7 @@ fn nudge_hotkey(state: &mut SetupHintsState) -> bool {
 
     eprintln!("\x1b[36m┌─────────────────────────────────────────────────────────────┐\x1b[0m");
     eprintln!(
-        "\x1b[36m│\x1b[0m \x1b[1m💡 Set up the Copilot key to launch jcode?\x1b[0m                   \x1b[36m│\x1b[0m"
+        "\x1b[36m│\x1b[0m \x1b[1m💡 Set up global keys to launch jcode?\x1b[0m                  \x1b[36m│\x1b[0m"
     );
     eprintln!(
         "\x1b[36m│\x1b[0m                                                             \x1b[36m│\x1b[0m"
@@ -562,7 +664,7 @@ fn nudge_hotkey(state: &mut SetupHintsState) -> bool {
                     state.launch_hotkey_tracking_version = super::LAUNCH_HOTKEY_TRACKING_VERSION;
                     let _ = state.save();
                     eprintln!(
-                        "  \x1b[32m✓\x1b[0m Created hotkey (\x1b[1mWin+Shift+F23\x1b[0m) → {} + jcode",
+                        "  \x1b[32m✓\x1b[0m Created hotkeys (\x1b[1mAlt+;\x1b[0m and \x1b[1mCopilot\x1b[0m) → {} + jcode",
                         terminal_name
                     );
                     eprintln!();
@@ -645,7 +747,7 @@ fn nudge_alacritty(state: &mut SetupHintsState) -> bool {
                         match create_hotkey_shortcut(true) {
                             Ok(()) => {
                                 eprintln!(
-                                    "  \x1b[32m✓\x1b[0m Hotkey updated: \x1b[1mWin+Shift+F23\x1b[0m → Alacritty + jcode"
+                                    "  \x1b[32m✓\x1b[0m Hotkeys updated: \x1b[1mAlt+;\x1b[0m and \x1b[1mCopilot\x1b[0m → Alacritty + jcode"
                                 );
                             }
                             Err(e) => {
@@ -682,7 +784,7 @@ fn prompt_try_it_out(installed_alacritty: bool) {
         "\x1b[32m│\x1b[0m                                                             \x1b[32m│\x1b[0m"
     );
     eprintln!(
-        "\x1b[32m│\x1b[0m    Press \x1b[1mWin+Shift+F23\x1b[0m, or the Copilot key, to launch.     \x1b[32m│\x1b[0m"
+        "\x1b[32m│\x1b[0m    Press \x1b[1mAlt+;\x1b[0m or the \x1b[1mCopilot key\x1b[0m to launch jcode.       \x1b[32m│\x1b[0m"
     );
     eprintln!(
         "\x1b[32m│\x1b[0m    The listener is native Jcode, no AutoHotkey required.          \x1b[32m│\x1b[0m"
@@ -709,12 +811,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_windows_hotkey_is_the_copilot_key() {
+    fn default_windows_hotkeys_are_shared_defaults_plus_copilot_key() {
         let entries = default_windows_launch_entries();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].chord, "win+shift+f23");
-        assert_eq!(entries[0].dir, "$HOME");
-        assert_eq!(entries[0].label, "home");
+        let shared = crate::launch_hotkeys::default_launch_entries();
+        assert_eq!(entries.len(), shared.len() + 1);
+        assert_eq!(&entries[..shared.len()], shared.as_slice());
+        let copilot = entries.last().unwrap();
+        assert_eq!(copilot.chord, "win+shift+f23");
+        assert_eq!(copilot.dir, "$HOME");
+        assert_eq!(copilot.label, "home");
     }
 
     #[test]

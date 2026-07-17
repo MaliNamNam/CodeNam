@@ -67,6 +67,13 @@ pub(crate) fn hotkey_to_win32(hotkey: &WindowsHotkey) -> Option<(u32, u32)> {
     chord_to_win32_with_super(&hotkey.chord, hotkey.win_modifier)
 }
 
+/// The physical Windows Copilot key emits Win+Shift+F23. Windows Shell can
+/// reserve that chord before `RegisterHotKey` sees it, so the native listener
+/// captures this exact entry with a low-level keyboard hook instead.
+pub(crate) fn is_copilot_hotkey(hotkey: &WindowsHotkey) -> bool {
+    hotkey_to_win32(hotkey) == Some((MOD_WIN | MOD_SHIFT, 0x86))
+}
+
 fn chord_to_win32_with_super(chord: &KeyChord, super_as_win: bool) -> Option<(u32, u32)> {
     let vk = key_to_vk(&chord.key)?;
     let mut mods = 0u32;
@@ -373,6 +380,13 @@ mod tests {
             (MOD_WIN | MOD_SHIFT, 0x86)
         );
         assert_eq!(display_windows_hotkey(&hotkey), "Win+Shift+F23");
+        assert!(is_copilot_hotkey(&hotkey));
+        assert!(!is_copilot_hotkey(&hk(
+            "cmd+shift+f23",
+            "$HOME",
+            "alt",
+            false
+        )));
     }
 
     #[test]

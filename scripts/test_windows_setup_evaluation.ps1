@@ -301,7 +301,7 @@ try {
         Assert-Contains $shortcutScript $jcodeExe 'Startup shortcut should preserve spaces and non-ASCII characters in the jcode path'
         Assert-PathMissing (Join-Path $profile.HotkeyDir 'jcode-hotkey.ps1') 'hotkey upgrade should remove the legacy PowerShell listener'
         $scriptText = Get-Content -LiteralPath $installScript -Raw
-        Assert-Contains $scriptText 'Win+Shift+F23 (Copilot key)' 'installer should document the Copilot-key chord mapping'
+        Assert-Contains $scriptText 'Configured Alt+; and the Copilot key' 'installer should document both Windows launch-key mappings'
         $script:coveredScenarios.copilot_key_mapping = $true
         $script:coveredScenarios.spaces_non_ascii_paths = $true
     }
