@@ -297,7 +297,7 @@ impl WindowsPowerGuard {
 
     fn stop(&mut self) -> io::Result<()> {
         if let Some(stop_tx) = self.stop_tx.take() {
-            drop(stop_tx.send(()));
+            let _stop_signal_sent = stop_tx.send(()).is_ok();
         }
 
         let clear_result = match self.done_rx.take() {
@@ -350,7 +350,7 @@ fn run_windows_power_guard(
         return;
     }
 
-    drop(stop_rx.recv());
+    let _stop_requested = stop_rx.recv().is_ok();
     let cleared = unsafe { SetThreadExecutionState(windows_clear_execution_state_flags()) };
     let result = if cleared == 0 {
         Err(io::Error::last_os_error())
