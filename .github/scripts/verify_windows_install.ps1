@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$ArtifactExePath,
-    [Parameter(Mandatory = $true)][string]$Version
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,6 +8,22 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $resolvedArtifact = (Resolve-Path -LiteralPath $ArtifactExePath).Path
+
+if (-not $Version) {
+    $artifactVersionOutput = & $resolvedArtifact --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "Local Windows artifact failed to run --version"
+    }
+
+    $artifactVersionText = ($artifactVersionOutput -join "`n")
+    if ($artifactVersionText -notmatch '(?i)\bjcode\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b') {
+        throw "Could not parse jcode version from local artifact output: $artifactVersionText"
+    }
+    $Version = 'v' + $Matches[1]
+} else {
+    $Version = 'v' + (($Version.Trim()) -replace '^[vV]', '')
+}
+
 $tempRoot = Join-Path $env:RUNNER_TEMP ("jcode-windows-install-verify-" + [guid]::NewGuid().ToString('N'))
 $localAppData = Join-Path $tempRoot 'localappdata'
 $appData = Join-Path $tempRoot 'appdata'
