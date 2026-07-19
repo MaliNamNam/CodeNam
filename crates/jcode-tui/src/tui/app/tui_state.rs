@@ -620,6 +620,13 @@ impl crate::tui::TuiState for App {
         self.chat_overscroll_active()
     }
 
+    fn chat_overscroll_pinned(&self) -> bool {
+        matches!(
+            self.overscroll_status_mode,
+            crate::config::OverscrollStatusMode::On
+        )
+    }
+
     fn chat_overscroll_remaining(&self) -> Option<f32> {
         self.chat_overscroll_remaining()
     }
@@ -1292,7 +1299,7 @@ impl crate::tui::TuiState for App {
             }
         });
 
-        let memory_info = gather_memory_info(self.memory_enabled);
+        let memory_info = gather_memory_info(self.memory_enabled, self.session.working_dir.clone());
 
         // Gather swarm info
         let swarm_info = if self.swarm_enabled {

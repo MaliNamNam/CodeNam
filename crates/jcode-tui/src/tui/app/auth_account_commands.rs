@@ -244,7 +244,7 @@ fn parse_account_command(trimmed: &str) -> Option<Result<AccountCommand, String>
             "effort" if provider.id == "openai" => {
                 if value.is_empty() {
                     return Some(Err(
-                        "Usage: /account openai effort <none|low|medium|high|xhigh|clear>"
+                        "Usage: /account openai effort <none|minimal|low|medium|high|xhigh|max|clear>"
                             .to_string(),
                     ));
                 }
@@ -711,10 +711,14 @@ fn save_openai_transport_setting_local(app: &mut App, value: Option<&str>) {
 
 fn save_openai_effort_setting_local(app: &mut App, value: Option<&str>) {
     if let Some(value) = value
-        && !matches!(value, "none" | "low" | "medium" | "high" | "xhigh")
+        && !matches!(
+            value,
+            "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+        )
     {
         app.push_display_message(DisplayMessage::error(
-            "OpenAI effort must be one of none, low, medium, high, or xhigh.".to_string(),
+            "OpenAI effort must be one of none, minimal, low, medium, high, xhigh, or max."
+                .to_string(),
         ));
         return;
     }
@@ -738,12 +742,14 @@ fn save_openai_effort_setting_local(app: &mut App, value: Option<&str>) {
 }
 
 pub(crate) fn save_openai_fast_setting_local(app: &mut App, enabled: bool) {
-    let value = if enabled { Some("priority") } else { None };
-    match crate::config::Config::set_openai_service_tier(value) {
+    // Persist an explicit "off" instead of clearing the key. `None` serializes
+    // by removing `openai_service_tier` from config.toml entirely, which made
+    // "/fast default off" look like it never saved anything (issue #506). The
+    // OpenAI runtime already treats "off" as disabling the tier.
+    let value = if enabled { "priority" } else { "off" };
+    match crate::config::Config::set_openai_service_tier(Some(value)) {
         Ok(()) => {
-            let _ = app
-                .provider
-                .set_service_tier(if enabled { "priority" } else { "off" });
+            let _ = app.provider.set_service_tier(value);
             let label = if enabled { "on" } else { "off" };
             app.set_status_notice(format!("Fast mode: {}", label));
             app.push_display_message(DisplayMessage::system(format!(
@@ -978,7 +984,10 @@ fn render_provider_settings_markdown(app: &App, provider_id: &str) -> String {
                 }
             ));
             lines.push("  - /account openai transport <auto|https|websocket>".to_string());
-            lines.push("  - /account openai effort <none|low|medium|high|xhigh|clear>".to_string());
+            lines.push(
+                "  - /account openai effort <none|minimal|low|medium|high|xhigh|max|clear>"
+                    .to_string(),
+            );
             lines.push("  - /account openai fast <on|off>".to_string());
         }
         "copilot" => {

@@ -126,6 +126,30 @@ impl DiffDisplayMode {
     }
 }
 
+/// When to show the overscroll status line (model/provider/context info below
+/// the input).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OverscrollStatusMode {
+    /// Never show the status line.
+    Off,
+    /// Always show the status line below the input.
+    On,
+    /// Elastic reveal: show it briefly when scrolling past the bottom (default).
+    #[default]
+    Overscroll,
+}
+
+impl OverscrollStatusMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Overscroll => "overscroll",
+        }
+    }
+}
+
 /// How to display mermaid diagrams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1039,6 +1063,12 @@ pub struct DisplayConfig {
     /// just the one-line summary (default: false)
     #[serde(default)]
     pub show_agentgrep_output: bool,
+    /// Show the dimmed technical detail (command, path, args) after the
+    /// model-provided intent on tool rows (default: false). When off, rows
+    /// that have an intent show only the intent; rows without an intent
+    /// always fall back to the technical detail.
+    #[serde(default)]
+    pub tool_call_details: bool,
     /// Native terminal scrollbar configuration for scrollable panes
     pub native_scrollbars: NativeScrollbarConfig,
     /// Surface occasional "learn this keybinding" nudges when the user keeps
@@ -1057,6 +1087,11 @@ pub struct DisplayConfig {
     /// command works regardless of this setting.
     #[serde(default)]
     pub active_sessions_manager: bool,
+    /// When to show the overscroll status line below the input
+    /// (off/on/overscroll, default: overscroll). "overscroll" is the elastic
+    /// reveal when scrolling past the bottom, "on" keeps it always visible.
+    #[serde(default)]
+    pub overscroll_status: OverscrollStatusMode,
 }
 
 impl Default for DisplayConfig {
@@ -1086,10 +1121,12 @@ impl Default for DisplayConfig {
             compact_notifications: false,
             copy_badge_alt_label: String::new(),
             show_agentgrep_output: false,
+            tool_call_details: false,
             native_scrollbars: NativeScrollbarConfig::default(),
             keybinding_hints: true,
             theme: String::new(),
             active_sessions_manager: false,
+            overscroll_status: OverscrollStatusMode::default(),
         }
     }
 }
@@ -1247,7 +1284,7 @@ pub struct ProviderConfig {
     pub default_model: Option<String>,
     /// Default provider to use (claude|openai|copilot|openrouter)
     pub default_provider: Option<String>,
-    /// Reasoning effort for OpenAI Responses API (none|low|medium|high|xhigh)
+    /// Reasoning effort for OpenAI Responses API (none|minimal|low|medium|high|xhigh|max)
     pub openai_reasoning_effort: Option<String>,
     /// Reasoning effort for Anthropic Messages API output_config (none|low|medium|high|xhigh; max aliases to strongest supported)
     pub anthropic_reasoning_effort: Option<String>,

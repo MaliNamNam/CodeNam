@@ -380,10 +380,10 @@ pub(super) fn format_tokens(tokens: u64) -> String {
     }
 }
 
-/// Copy text to clipboard. On Windows, the Win32 clipboard (arboard) is
-/// authoritative, with OSC 52 as a remote-session fallback. Elsewhere, try
-/// wl-copy first (Wayland), then OSC 52 (works over SSH / Docker / tmux),
-/// then arboard as a final fallback.
+/// Copy text to clipboard. On Windows and macOS, the native clipboard API
+/// (arboard) is authoritative, with OSC 52 as a remote-session fallback.
+/// Elsewhere, try wl-copy first (Wayland), then OSC 52 (works over SSH /
+/// Docker / tmux), then arboard as a final fallback.
 pub(super) fn copy_to_clipboard(text: &str) -> bool {
     // On Windows, the native clipboard API must run before OSC 52. Writing an
     // OSC 52 sequence to stdout "succeeds" even when the console (conhost,
@@ -401,7 +401,46 @@ pub(super) fn copy_to_clipboard(text: &str) -> bool {
         return copy_to_clipboard_osc52(text);
     }
 
-    #[cfg(not(windows))]
+    // Same class of bug on macOS: Apple Terminal (Terminal.app) silently
+    // ignores OSC 52, yet writing the sequence to stdout "succeeds", so we
+    // reported "Copied" while leaving the clipboard untouched. NSPasteboard
+    // via arboard (with pbcopy as a belt-and-braces fallback) is authoritative
+    // for local sessions; OSC 52 remains as the final remote-session fallback.
+    #[cfg(target_os = "macos")]
+    {
+        if arboard::Clipboard::new()
+            .and_then(|mut cb| cb.set_text(text.to_string()))
+            .is_ok()
+        {
+            return true;
+        }
+        if let Ok(mut child) = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.as_mut()
+                && stdin.write_all(text.as_bytes()).is_ok()
+            {
+                drop(child.stdin.take());
+                if child.wait().map(|s| s.success()).unwrap_or(false) {
+                    return true;
+                }
+            }
+        }
+        return copy_to_clipboard_osc52(text);
+    }
+
+    // Linux has the same failure class (issue #504, Kali/X11): wl-copy fails
+    // outside Wayland, and many terminals (xterm, older VTE) silently ignore
+    // OSC 52 while the stdout write still "succeeds", so the arboard fallback
+    // never ran. Prefer native clipboards when a display is available: wl-copy
+    // (Wayland), then arboard (X11), and only then OSC 52 for genuinely
+    // headless/remote sessions (SSH, Docker, tmux) where both native paths
+    // fail fast for lack of a display server.
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         if let Ok(mut child) = std::process::Command::new("wl-copy")
             .stdin(std::process::Stdio::piped())
@@ -419,12 +458,13 @@ pub(super) fn copy_to_clipboard(text: &str) -> bool {
                 }
             }
         }
-        if copy_to_clipboard_osc52(text) {
-            return true;
-        }
-        arboard::Clipboard::new()
+        if arboard::Clipboard::new()
             .and_then(|mut cb| cb.set_text(text.to_string()))
             .is_ok()
+        {
+            return true;
+        }
+        copy_to_clipboard_osc52(text)
     }
 }
 
@@ -548,76 +588,7 @@ pub(super) fn inferred_reasoning_efforts(
     provider_name: Option<&str>,
     model_name: Option<&str>,
 ) -> Vec<&'static str> {
-    let provider = provider_name.unwrap_or_default().to_ascii_lowercase();
-    let model = model_name.unwrap_or_default().to_ascii_lowercase();
-
-    if provider.contains("openrouter") {
-        return vec![
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "swarm",
-            "swarm-deep",
-        ];
-    }
-
-    let is_anthropic = provider.contains("anthropic")
-        || provider.contains("claude")
-        || model.starts_with("claude-");
-    if is_anthropic {
-        // Shared capability table (optimistic for unknown 5.x+ generations);
-        // see `jcode_provider_core::anthropic_reasoning_caps`. Keeps the effort
-        // cycler in lockstep with what the Anthropic runtime actually sends.
-        let caps = jcode_provider_core::anthropic_reasoning_caps(&model);
-        if !caps.supports_reasoning_effort() {
-            return Vec::new();
-        }
-        let mut efforts = vec!["none", "low", "medium", "high"];
-        if caps.xhigh_effort {
-            efforts.push("xhigh");
-        }
-        if caps.max_effort {
-            efforts.push("max");
-        }
-        efforts.extend(["swarm", "swarm-deep"]);
-        return efforts;
-    }
-
-    let is_deepseek = provider.contains("deepseek") || model.contains("deepseek");
-    if is_deepseek {
-        return vec![
-            "none",
-            "low",
-            "medium",
-            "high",
-            "max",
-            "swarm",
-            "swarm-deep",
-        ];
-    }
-
-    let is_openai = provider.contains("openai")
-        || provider.contains("codex")
-        || model.starts_with("gpt-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("o5");
-    if is_openai {
-        return vec![
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "swarm",
-            "swarm-deep",
-        ];
-    }
-
-    Vec::new()
+    jcode_provider_core::inferred_reasoning_efforts(provider_name, model_name)
 }
 
 pub(super) fn effort_bar(index: usize, total: usize) -> String {
@@ -634,8 +605,11 @@ pub(super) fn effort_bar(index: usize, total: usize) -> String {
 
 pub(super) fn service_tier_display_label(service_tier: &str) -> &str {
     match service_tier {
-        "priority" => "Fast",
+        "priority" | "fast" => "Fast",
         "flex" => "Flex",
+        // Explicit disable values persisted by "/fast default off" (issue
+        // #506) and accepted by the OpenAI runtime.
+        "off" | "default" | "auto" | "none" => "Standard",
         other => other,
     }
 }
@@ -1198,7 +1172,10 @@ pub(super) fn gather_todos_and_goals_for_session(
     (Vec::new(), Vec::new())
 }
 
-pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
+pub(super) fn gather_memory_info(
+    memory_enabled: bool,
+    working_dir: Option<String>,
+) -> Option<MemoryInfo> {
     use std::sync::Mutex;
     use std::time::Instant;
 
@@ -1244,8 +1221,9 @@ pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
                 None => fallback_memory_info(memory_enabled, &activity, &sidecar_model),
             };
             *refreshing = true;
-            std::thread::spawn(|| {
-                let result = gather_memory_info_inner();
+            let working_dir = working_dir.clone();
+            std::thread::spawn(move || {
+                let result = gather_memory_info_inner(working_dir);
                 if let Ok(mut guard) = CACHE.lock() {
                     *guard = Some((Instant::now(), result, false));
                 }
@@ -1254,8 +1232,8 @@ pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
         }
 
         *guard = Some((backdated_now(TTL + Duration::from_secs(1)), None, true));
-        std::thread::spawn(|| {
-            let result = gather_memory_info_inner();
+        std::thread::spawn(move || {
+            let result = gather_memory_info_inner(working_dir);
             if let Ok(mut guard) = CACHE.lock() {
                 *guard = Some((Instant::now(), result, false));
             }
@@ -1283,7 +1261,7 @@ fn fallback_memory_info(
     })
 }
 
-fn gather_memory_info_inner() -> Option<MemoryInfo> {
+fn gather_memory_info_inner(working_dir: Option<String>) -> Option<MemoryInfo> {
     let activity = crate::memory::get_activity();
     let sidecar_model = if crate::memory::memory_sidecar_enabled() {
         let sidecar = crate::sidecar::Sidecar::new();
@@ -1298,7 +1276,12 @@ fn gather_memory_info_inner() -> Option<MemoryInfo> {
 
     use crate::memory::MemoryManager;
 
-    let manager = MemoryManager::new();
+    // Scope the manager to the session working dir so the project count reads
+    // the same projects/<hash>.json store the memory tool writes (issue #491).
+    let manager = match working_dir.as_deref() {
+        Some(dir) if !dir.trim().is_empty() => MemoryManager::new().with_project_dir(dir),
+        _ => MemoryManager::new(),
+    };
     let project_graph = manager.load_project_graph().ok();
     let global_graph = manager.load_global_graph().ok();
 

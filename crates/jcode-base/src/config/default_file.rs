@@ -171,6 +171,12 @@ prompt_entry_animation = true
 # results directly in the chat.
 # show_agentgrep_output = false
 
+# Show the dimmed technical detail (command, file path, args) next to the
+# model-provided intent on tool rows (default: false). When false, tool rows
+# with an intent show just the intent; rows without an intent still show the
+# technical detail.
+# tool_call_details = false
+
 # Occasionally surface a "learn this keybinding" nudge (in a distinct color)
 # when you keep doing something the slow way (e.g. /resume) instead of using
 # its configured shortcut. Set false to disable all such hints (default: true).
@@ -181,6 +187,12 @@ prompt_entry_animation = true
 # response and which are ready for input (default: false). The /active
 # command is always available regardless of this setting.
 # active_sessions_manager = false
+
+# Overscroll status line (model/provider/context info below the input):
+#   "overscroll" - elastic reveal when scrolling past the bottom (default)
+#   "on"         - always visible
+#   "off"        - never shown
+# overscroll_status = "overscroll"
 
 # Disable specific animation variants by name.
 # Examples: ["donut"] or ["donut", "orbit_rings"]
@@ -282,7 +294,7 @@ tool_profile = "acp"
 # `claude` and `anthropic-api` are distinct providers with distinct credentials.
 # See docs/AUTH_CREDENTIAL_SOURCES.md for where each credential lives.
 # default_provider = "copilot"
-# OpenAI reasoning effort (none|low|medium|high|xhigh)
+# OpenAI reasoning effort (none|minimal|low|medium|high|xhigh|max)
 openai_reasoning_effort = "low"
 # Anthropic reasoning effort for Claude reasoning models (none|low|medium|high|xhigh|max)
 # xhigh needs Opus 4.7/4.8 or Fable 5; max needs an output_config effort model (Opus/Sonnet 4.6+).
@@ -290,9 +302,9 @@ openai_reasoning_effort = "low"
 # anthropic_reasoning_effort = "medium"
 # OpenAI transport mode (auto|websocket|https)
 # openai_transport = "auto"
-# OpenAI service tier override (priority|flex)
+# OpenAI service tier override (priority|flex|off)
 # Defaults to `priority` to match Codex /fast behavior for OpenAI OAuth
-# (higher speed, higher usage). Set to "off" to disable.
+# (higher speed, higher usage). Set to "off" (or "standard") to disable.
 openai_service_tier = "priority"
 # Preserve provider-native reasoning/thinking for future-turn context when supported.
 # Applies to OpenRouter, Anthropic, and OpenAI native reasoning replay. Display is separate.

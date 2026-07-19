@@ -59,12 +59,21 @@ fn test_openai_live_catalog_replaces_static_fallback_list() {
     let models = known_openai_model_ids();
 
     assert_eq!(
-        models,
-        vec![
+        models[..2],
+        [
             "gpt-5.4-live-only".to_string(),
             jcode_provider_core::CHATGPT_WEB_MODEL.to_string()
         ]
     );
+    // The only entries allowed past the live catalog are the platform-API-only
+    // GPT Pro models, appended when an OPENAI_API_KEY is configured on the
+    // machine running the tests.
+    for extra in &models[2..] {
+        assert!(
+            jcode_provider_core::is_openai_api_only_pro_model(extra),
+            "unexpected non-pro extra model '{extra}' in live catalog list"
+        );
+    }
 
     crate::auth::codex::set_active_account_override(None);
 }
@@ -106,6 +115,12 @@ fn test_openai_model_catalog_hydrates_from_disk_cache() {
             context_limits: [("openai-disk-only-model".to_string(), 424_242)]
                 .into_iter()
                 .collect(),
+            reasoning_efforts: [(
+                "openai-disk-only-model".to_string(),
+                vec!["low".to_string(), "max".to_string()],
+            )]
+            .into_iter()
+            .collect(),
         });
 
         assert_eq!(
@@ -115,6 +130,11 @@ fn test_openai_model_catalog_hydrates_from_disk_cache() {
         assert_eq!(
             context_limit_for_model("openai-disk-only-model"),
             Some(424_242)
+        );
+        assert_eq!(
+            cached_openai_reasoning_efforts()
+                .and_then(|efforts| efforts.get("openai-disk-only-model").cloned()),
+            Some(vec!["low".to_string(), "max".to_string()])
         );
 
         crate::auth::codex::set_active_account_override(None);

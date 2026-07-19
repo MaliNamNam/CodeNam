@@ -37,7 +37,7 @@ fn load_user_root_session(session_id: &str) -> Option<bool> {
 }
 
 fn user_root_session_presence() -> Vec<SessionPresence> {
-    session::session_presence()
+    session::user_session_presence()
         .into_iter()
         // A marker can briefly precede its first persisted snapshot. Keep an
         // unknown session visible for this read rather than hiding a new window.
@@ -128,7 +128,7 @@ pub fn run_menubar_command(once: bool, json: bool) -> Result<()> {
             "The live menu bar indicator is only available on macOS. \
              Showing current counts instead (use --once or --json for scripting):"
         );
-        println!("{}", format_menubar_summary(session::session_counts()));
+        println!("{}", format_menubar_summary(session::user_session_counts()));
         Ok(())
     }
 }
@@ -568,7 +568,7 @@ mod macos {
             // process won't auto-adopt the change on its own).
             sync_app_appearance(&app_for_refresh);
 
-            let mut sessions = session::session_presence();
+            let mut sessions = session::user_session_presence();
             let active_ids: HashSet<String> = sessions
                 .iter()
                 .map(|presence| presence.session_id.clone())

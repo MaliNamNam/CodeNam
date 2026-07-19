@@ -9,6 +9,7 @@ pub mod model_id;
 pub mod models;
 pub mod openai_schema;
 pub mod pricing;
+pub mod reasoning;
 pub mod retry_after;
 pub mod selection;
 pub mod transport;
@@ -38,11 +39,16 @@ pub use fallback_pick::{
 pub use fingerprint::{log_provider_canonical_input, stable_hash_json, stable_hash_str};
 pub use models::{
     ALL_CLAUDE_MODELS, ALL_OPENAI_MODELS, CHATGPT_WEB_MODEL, DEFAULT_CLAUDE_MODEL,
-    DEFAULT_CONTEXT_LIMIT, DEFAULT_OPENAI_MODEL, ModelCapabilities, context_limit_for_model,
-    context_limit_for_model_with_provider, context_limit_for_model_with_provider_and_cache,
-    is_listable_model_name, normalize_copilot_model_name,
+    DEFAULT_CONTEXT_LIMIT, DEFAULT_OPENAI_MODEL, ModelCapabilities, OPENAI_API_ONLY_PRO_MODELS,
+    context_limit_for_model, context_limit_for_model_with_provider,
+    context_limit_for_model_with_provider_and_cache, is_listable_model_name,
+    is_openai_api_only_pro_model, normalize_copilot_model_name,
     provider_for_model as core_provider_for_model,
     provider_for_model_with_hint as core_provider_for_model_with_hint, provider_key_from_hint,
+};
+pub use reasoning::{
+    DEEPSEEK_SELECTABLE_EFFORTS, OPENAI_SELECTABLE_EFFORTS, OPENROUTER_SELECTABLE_EFFORTS,
+    canonical_reasoning_effort, inferred_reasoning_efforts,
 };
 pub use selection::{
     ActiveProvider, ProviderAvailability, auto_default_provider, cli_provider_arg_for_session_key,
