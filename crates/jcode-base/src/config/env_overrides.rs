@@ -340,6 +340,32 @@ impl Config {
                 self.agents.swarm_max_concurrent_agents = parsed;
             }
         }
+        if let Ok(v) = std::env::var("JCODE_DEFAULT_AGENT") {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                self.agents.default_agent = trimmed.to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_MAX_STEPS") {
+            if let Ok(parsed) = v.trim().parse::<u32>() {
+                self.agents.max_steps = Some(parsed);
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_SUBAGENT_DEPTH") {
+            if let Ok(parsed) = v.trim().parse::<usize>() {
+                self.agents.subagent_depth = parsed;
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_INTERACTIVE_ASK") {
+            if let Some(parsed) = parse_env_bool(&v) {
+                self.permission.interactive_ask = parsed;
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_PERMISSION_ASK_TIMEOUT_SECS") {
+            if let Ok(parsed) = v.trim().parse::<u64>() {
+                self.permission.ask_timeout_secs = parsed;
+            }
+        }
         if let Ok(v) = std::env::var("JCODE_MEMORY_MODEL") {
             let trimmed = v.trim();
             self.agents.memory_model = if trimmed.is_empty() {

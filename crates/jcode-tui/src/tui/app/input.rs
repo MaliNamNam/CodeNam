@@ -2132,6 +2132,14 @@ pub(super) fn handle_modal_key(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<bool> {
+    if !app.permission_queue.is_empty() {
+        // Decision is applied by remote key path via pending_permission_decision.
+        if let Some((request_id, decision)) = handle_permission_prompt_key(app, code) {
+            app.pending_permission_decision = Some((request_id, decision));
+        }
+        return Ok(true);
+    }
+
     if app.changelog_scroll.is_some() {
         app.handle_changelog_key(code)?;
         return Ok(true);
@@ -2201,6 +2209,97 @@ pub(super) fn handle_modal_key(
     }
 
     Ok(false)
+}
+
+fn apply_local_permission_decision(request_id: &str, decision: &str) {
+    if let Some(rest) = decision.strip_prefix("deny_all:") {
+        for id in rest.split(',').filter(|s| !s.is_empty()) {
+            let _ = crate::safety::record_permission_via_file_with_always(
+                id, false, false, "tui_local", None,
+            );
+        }
+        return;
+    }
+    if let Some(rest) = decision.strip_prefix("once_all:") {
+        for id in rest.split(',').filter(|s| !s.is_empty()) {
+            let _ = crate::safety::record_permission_via_file_with_always(
+                id, true, false, "tui_local", None,
+            );
+        }
+        return;
+    }
+    let (approved, always) = match decision {
+        "always" => (true, true),
+        "deny" => (false, false),
+        _ => (true, false),
+    };
+    let _ = crate::safety::record_permission_via_file_with_always(
+        request_id, approved, always, "tui_local", None,
+    );
+}
+
+/// OpenCode-style dock: one request at a time (FIFO). Next pops after answer.
+pub(super) fn handle_permission_prompt_key(
+    app: &mut App,
+    code: KeyCode,
+) -> Option<(String, String)> {
+    if app.permission_queue.is_empty() {
+        return None;
+    }
+    match code {
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.permission_queue.selected = match app.permission_queue.selected {
+                super::PermissionPromptChoice::Once => super::PermissionPromptChoice::Deny,
+                super::PermissionPromptChoice::Always => super::PermissionPromptChoice::Once,
+                super::PermissionPromptChoice::Deny => super::PermissionPromptChoice::Always,
+            };
+            None
+        }
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => {
+            app.permission_queue.selected = match app.permission_queue.selected {
+                super::PermissionPromptChoice::Once => super::PermissionPromptChoice::Always,
+                super::PermissionPromptChoice::Always => super::PermissionPromptChoice::Deny,
+                super::PermissionPromptChoice::Deny => super::PermissionPromptChoice::Once,
+            };
+            None
+        }
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            let item = app.permission_queue.take_current()?;
+            Some((item.request_id, "once".into()))
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            let item = app.permission_queue.take_current()?;
+            Some((item.request_id, "always".into()))
+        }
+        // OpenCode reject: fail this ask and clear remaining pending for session
+        KeyCode::Char('n')
+        | KeyCode::Char('N')
+        | KeyCode::Char('d')
+        | KeyCode::Char('D')
+        | KeyCode::Esc => {
+            let items = app.permission_queue.drain_all();
+            let first = items.first()?.request_id.clone();
+            let all_ids: Vec<String> = items.into_iter().map(|i| i.request_id).collect();
+            Some((first, format!("deny_all:{}", all_ids.join(","))))
+        }
+        KeyCode::Enter => match app.permission_queue.selected {
+            super::PermissionPromptChoice::Once => {
+                let item = app.permission_queue.take_current()?;
+                Some((item.request_id, "once".into()))
+            }
+            super::PermissionPromptChoice::Always => {
+                let item = app.permission_queue.take_current()?;
+                Some((item.request_id, "always".into()))
+            }
+            super::PermissionPromptChoice::Deny => {
+                let items = app.permission_queue.drain_all();
+                let first = items.first()?.request_id.clone();
+                let all_ids: Vec<String> = items.into_iter().map(|i| i.request_id).collect();
+                Some((first, format!("deny_all:{}", all_ids.join(","))))
+            }
+        },
+        _ => None,
+    }
 }
 
 pub(super) fn handle_global_control_shortcuts(
@@ -2479,6 +2578,16 @@ impl App {
         }
 
         if handle_modal_key(self, code, modifiers)? {
+            if let Some((request_id, decision)) = self.pending_permission_decision.take() {
+                apply_local_permission_decision(&request_id, &decision);
+                self.set_status_notice(if decision.starts_with("deny_all") {
+                    "Permission denied"
+                } else if decision == "always" {
+                    "Always allow for this session"
+                } else {
+                    "Allowed once"
+                });
+            }
             return Ok(());
         }
 

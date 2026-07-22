@@ -742,6 +742,8 @@ impl Server {
         // session-targeted scheduled tasks still have a live delivery loop.
         let ambient_runner = {
             let safety = Arc::new(crate::safety::SafetySystem::new());
+            // Share with main-agent interactive permission asks.
+            crate::tool::ambient::init_safety_system(Arc::clone(&safety));
             let handle = AmbientRunnerHandle::new(safety);
             crate::tool::ambient::init_schedule_runner(handle.clone());
             Some(handle)

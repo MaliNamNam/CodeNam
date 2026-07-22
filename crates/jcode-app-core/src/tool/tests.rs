@@ -81,17 +81,25 @@ async fn test_discover_tools_not_registered_when_sponsors_disabled() {
 }
 
 #[tokio::test]
-async fn subagent_tool_is_not_registered() {
+async fn task_tool_is_registered() {
     let provider: Arc<dyn Provider> = Arc::new(MockProvider);
     let registry = Registry::new(provider).await;
 
+    assert!(
+        registry
+            .tool_names()
+            .await
+            .iter()
+            .any(|name| name == "task"),
+        "lightweight task tool should be registered for OpenCode-style subagents"
+    );
     assert!(
         !registry
             .tool_names()
             .await
             .iter()
             .any(|name| name == "subagent"),
-        "the deprecated direct subagent tool must not be exposed; use swarm instead"
+        "legacy subagent name should resolve via alias, not be registered directly"
     );
 }
 
@@ -176,8 +184,10 @@ fn test_resolve_tool_name_oauth_aliases() {
     assert_eq!(Registry::resolve_tool_name("read_file"), "read");
     assert_eq!(Registry::resolve_tool_name("write_file"), "write");
     assert_eq!(Registry::resolve_tool_name("edit_file"), "edit");
-    assert_eq!(Registry::resolve_tool_name("task_runner"), "subagent");
-    assert_eq!(Registry::resolve_tool_name("task"), "subagent");
+    assert_eq!(Registry::resolve_tool_name("task_runner"), "task");
+    assert_eq!(Registry::resolve_tool_name("task"), "task");
+    assert_eq!(Registry::resolve_tool_name("subagent"), "task");
+    assert_eq!(Registry::resolve_tool_name("Agent"), "task");
     assert_eq!(Registry::resolve_tool_name("launch"), "open");
     assert_eq!(Registry::resolve_tool_name("grep"), "agentgrep");
     assert_eq!(Registry::resolve_tool_name("file_grep"), "agentgrep");

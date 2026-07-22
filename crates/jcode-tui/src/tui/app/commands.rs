@@ -7,7 +7,8 @@ pub(super) use super::commands_improve::{
     refactor_stop_prompt, restore_improve_mode, session_improve_mode_for,
 };
 pub(super) use super::commands_plan::{
-    build_plan_prompt, handle_plan_command_local, parse_plan_command, plan_launch_notice,
+    build_plan_prompt, build_profile_notice, handle_build_command_local, handle_plan_command_local,
+    parse_build_command, parse_plan_command, plan_launch_notice,
 };
 #[cfg(test)]
 pub(super) use super::commands_review::queue_autojudge_remote;
@@ -1745,6 +1746,11 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
 
     if let Some(command) = parse_plan_command(trimmed) {
         handle_plan_command_local(app, command);
+        return true;
+    }
+
+    if parse_build_command(trimmed).is_some() {
+        handle_build_command_local(app);
         return true;
     }
 

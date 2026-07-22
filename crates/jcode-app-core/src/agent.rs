@@ -69,6 +69,24 @@ static WORKING_GIT_STATE_CACHE: LazyLock<StdMutex<HashMap<PathBuf, Option<GitSta
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 const STREAM_KEEPALIVE_PONG_ID: u64 = 0;
 
+/// Forwarded to the TUI as ServerEvent::PermissionRequest.
+#[derive(Debug, Clone)]
+pub struct PermissionUiRequest {
+    pub request_id: String,
+    pub tool: String,
+    pub permission: String,
+    pub pattern: String,
+    pub description: String,
+}
+
+fn parse_env_bool_simple(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 fn stable_hash_str(value: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
@@ -239,6 +257,9 @@ pub struct Agent {
     rewind_undo_snapshot: Option<RewindUndoSnapshot>,
     /// Channel for tools to request stdin input from the user
     stdin_request_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::tool::StdinInputRequest>>,
+    /// Channel to surface interactive permission asks to the attached TUI.
+    permission_request_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<PermissionUiRequest>>,
     /// Canonical reducer-backed view of runtime provider/model selection.
     provider_runtime_state: ProviderRuntimeState,
     /// When true, this session is an inline swarm worker: stream a throttled
@@ -249,6 +270,18 @@ pub struct Agent {
     /// Persists across turns so the coordinator's viewport never blanks at
     /// turn boundaries or freezes during long tool calls.
     inline_tail: inline_tail::InlineTailBuffer,
+    /// Active agent profile name (`build`, `plan`, `explore`, `general`, …).
+    agent_profile_name: String,
+    /// Merged permission ruleset for this agent (profile + session tightens).
+    permission_rules: jcode_permission::Ruleset,
+    /// Session-scoped "always allow" permission rules (from prior approvals).
+    session_approved_rules: jcode_permission::Ruleset,
+    /// Optional max tool-loop steps per user message (from profile or config).
+    max_steps: Option<u32>,
+    /// Optional profile system-prompt overlay (explore/plan).
+    agent_prompt_overlay: Option<String>,
+    /// Doom-loop tracker for the current tool batch.
+    doom_loop: jcode_permission::DoomLoopTracker,
 }
 
 impl Agent {
@@ -271,6 +304,58 @@ impl Agent {
     ) -> Self {
         let skills = SkillRegistry::shared_snapshot();
         let initial_provider_model = provider.model();
+        let agents_cfg = crate::config::config().agents.clone();
+        // Child sessions (swarm/task) start from `build` capabilities; callers
+        // apply a subagent profile explicitly when needed. Root sessions use
+        // session-persisted profile, else configured default (build/plan).
+        let is_child = session.parent_id.is_some();
+        let profile_name = if is_child {
+            "build".to_string()
+        } else if let Some(saved) = session
+            .agent_profile
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            saved.to_string()
+        } else {
+            std::env::var("JCODE_DEFAULT_AGENT")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| agents_cfg.default_agent.clone())
+        };
+        let profile = jcode_permission::AgentProfile::builtin(&profile_name)
+            .unwrap_or_else(jcode_permission::AgentProfile::build);
+        let max_steps = agents_cfg
+            .max_steps
+            .or_else(|| {
+                std::env::var("JCODE_MAX_STEPS")
+                    .ok()
+                    .and_then(|v| v.trim().parse().ok())
+            })
+            .or(profile.steps);
+        let mut permission_rules = profile.permission.clone();
+        // Merge user config permission rules (last match wins).
+        for rule_cfg in &crate::config::config().permission.rules {
+            if let Some(action) = jcode_permission::Action::parse(&rule_cfg.action) {
+                permission_rules.push(jcode_permission::Rule::new(
+                    rule_cfg.permission.clone(),
+                    rule_cfg.pattern.clone(),
+                    action,
+                ));
+            }
+        }
+        let session_approved_rules = session.approved_permission_rules.clone();
+        let mut disabled_tools = disabled_tools;
+        let mut allowed_tools = allowed_tools;
+        if !is_child {
+            if profile.name == "plan" {
+                disabled_tools.extend(jcode_permission::AgentProfile::plan_tool_denylist());
+            }
+            if profile.name == "explore" {
+                allowed_tools = Some(jcode_permission::AgentProfile::explore_tool_allowlist());
+            }
+        }
         let agent = Self {
             provider,
             registry,
@@ -299,9 +384,16 @@ impl Agent {
             memory_enabled: crate::config::config().features.memory,
             rewind_undo_snapshot: None,
             stdin_request_tx: None,
+            permission_request_tx: None,
             provider_runtime_state: ProviderRuntimeState::observed(initial_provider_model),
             inline_output_tap: false,
             inline_tail: inline_tail::InlineTailBuffer::default(),
+            agent_profile_name: profile.name.clone(),
+            permission_rules,
+            session_approved_rules,
+            max_steps,
+            agent_prompt_overlay: profile.prompt.clone(),
+            doom_loop: jcode_permission::DoomLoopTracker::new(),
         };
         crate::tool::set_session_tool_policy(
             &agent.session.id,
@@ -339,6 +431,264 @@ impl Agent {
             .iter()
             .map(|skill| skill.name.clone())
             .collect()
+    }
+
+    pub fn agent_profile_name(&self) -> &str {
+        &self.agent_profile_name
+    }
+
+    /// Switch primary agent profile (`build` / `plan`). Rebuilds tool policy.
+    pub fn set_agent_profile(&mut self, name: &str) -> Result<()> {
+        let profile = jcode_permission::AgentProfile::builtin(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unknown agent profile '{}'. Built-ins: build, plan, general, explore",
+                name
+            )
+        })?;
+        // Reset tool filters to config baseline, then re-apply profile hard filters.
+        let tool_selection = crate::config::config().tools.selection();
+        self.allowed_tools = tool_selection.allowed_tools;
+        self.disabled_tools = tool_selection.disabled_tools;
+
+        self.agent_profile_name = profile.name.clone();
+        self.permission_rules = profile.permission.clone();
+        for rule_cfg in &crate::config::config().permission.rules {
+            if let Some(action) = jcode_permission::Action::parse(&rule_cfg.action) {
+                self.permission_rules.push(jcode_permission::Rule::new(
+                    rule_cfg.permission.clone(),
+                    rule_cfg.pattern.clone(),
+                    action,
+                ));
+            }
+        }
+        self.agent_prompt_overlay = profile.prompt.clone();
+        if let Some(steps) = profile.steps {
+            self.max_steps = Some(steps);
+        } else {
+            self.max_steps = crate::config::config().agents.max_steps.or_else(|| {
+                std::env::var("JCODE_MAX_STEPS")
+                    .ok()
+                    .and_then(|v| v.trim().parse().ok())
+            });
+        }
+        if profile.name == "plan" {
+            self.disabled_tools
+                .extend(jcode_permission::AgentProfile::plan_tool_denylist());
+        }
+        if profile.name == "explore" {
+            self.allowed_tools = Some(jcode_permission::AgentProfile::explore_tool_allowlist());
+        }
+        if profile.name == "general" {
+            self.disabled_tools.insert("todo".to_string());
+        }
+        self.session.agent_profile = Some(profile.name.clone());
+        self.locked_tools = None;
+        crate::tool::set_session_tool_policy(
+            &self.session.id,
+            self.allowed_tools.clone(),
+            self.disabled_tools.clone(),
+        );
+        self.session.save()?;
+        Ok(())
+    }
+
+    /// Apply a subagent profile for a child worker (used by the task tool).
+    pub fn apply_subagent_profile(&mut self, name: &str) {
+        let profile = jcode_permission::AgentProfile::builtin(name)
+            .unwrap_or_else(jcode_permission::AgentProfile::general);
+        self.agent_profile_name = profile.name.clone();
+        self.permission_rules = profile.permission.clone();
+        self.agent_prompt_overlay = profile.prompt.clone();
+        if let Some(steps) = profile.steps {
+            self.max_steps = Some(steps);
+        }
+        if profile.name == "explore" {
+            self.allowed_tools = Some(jcode_permission::AgentProfile::explore_tool_allowlist());
+        }
+        if profile.name == "general" {
+            self.disabled_tools.insert("todo".to_string());
+        }
+        // Nesting safety: children cannot spawn further tasks/todos by default.
+        self.disabled_tools.insert("task".to_string());
+        self.disabled_tools.insert("subagent".to_string());
+        self.disabled_tools.insert("todo".to_string());
+        self.locked_tools = None;
+        crate::tool::set_session_tool_policy(
+            &self.session.id,
+            self.allowed_tools.clone(),
+            self.disabled_tools.clone(),
+        );
+    }
+
+    pub(super) fn check_tool_permission(
+        &self,
+        tool_name: &str,
+        resource_pattern: &str,
+    ) -> jcode_permission::CheckResult {
+        // external_directory: path tools outside workspace use that permission.
+        let workspace = self
+            .session
+            .working_dir
+            .as_deref()
+            .map(std::path::Path::new);
+        if resource_pattern != "*"
+            && matches!(
+                jcode_permission::tool_permission_name(tool_name),
+                "read" | "edit" | "list" | "grep"
+            )
+            && jcode_permission::is_external_path(resource_pattern, workspace)
+        {
+            let rules = jcode_permission::runtime_ruleset(
+                &self.permission_rules,
+                &self.session_approved_rules,
+            );
+            return jcode_permission::check_tool(
+                "external_directory",
+                resource_pattern,
+                &rules,
+                &[],
+                !self.interactive_ask_enabled(),
+            );
+        }
+        let rules = jcode_permission::runtime_ruleset(
+            &self.permission_rules,
+            &self.session_approved_rules,
+        );
+        jcode_permission::check_tool(
+            tool_name,
+            resource_pattern,
+            &rules,
+            &[],
+            !self.interactive_ask_enabled(),
+        )
+    }
+
+    fn interactive_ask_enabled(&self) -> bool {
+        if let Ok(v) = std::env::var("JCODE_INTERACTIVE_ASK") {
+            if let Some(b) = parse_env_bool_simple(&v) {
+                return b;
+            }
+        }
+        crate::config::config().permission.interactive_ask
+    }
+
+    pub(super) async fn enforce_tool_permission(
+        &mut self,
+        tool_name: &str,
+        input: &serde_json::Value,
+    ) -> Result<()> {
+        if let Some(allowed) = self.allowed_tools.as_ref()
+            && !allowed.contains(tool_name)
+        {
+            return Err(anyhow::anyhow!("Tool '{}' is not allowed", tool_name));
+        }
+        if self.disabled_tools.contains(tool_name) {
+            return Err(anyhow::anyhow!("Tool '{}' is disabled", tool_name));
+        }
+
+        let pattern = jcode_permission::resource_pattern_for_tool(tool_name, input);
+        match self.check_tool_permission(tool_name, &pattern) {
+            jcode_permission::CheckResult::Allow => Ok(()),
+            jcode_permission::CheckResult::Deny {
+                permission,
+                pattern,
+            } => Err(anyhow::anyhow!(
+                "Permission denied for tool '{}' ({permission}/{pattern})",
+                tool_name
+            )),
+            jcode_permission::CheckResult::Ask {
+                permission,
+                pattern,
+            } => {
+                self.request_interactive_permission(tool_name, &permission, &pattern)
+                    .await
+            }
+        }
+    }
+
+    async fn request_interactive_permission(
+        &mut self,
+        tool_name: &str,
+        permission: &str,
+        pattern: &str,
+    ) -> Result<()> {
+        let safety = crate::tool::ambient::shared_safety_system();
+        let request_id = crate::safety::new_request_id();
+        let description = format!("{tool_name} → {permission} ({pattern})");
+        let request = crate::safety::PermissionRequest {
+            id: request_id.clone(),
+            action: permission.to_string(),
+            description: description.clone(),
+            rationale: format!(
+                "Agent profile '{}' requires approval for this action",
+                self.agent_profile_name
+            ),
+            urgency: crate::safety::Urgency::Normal,
+            wait: true,
+            created_at: chrono::Utc::now(),
+            context: Some(serde_json::json!({
+                "session_id": self.session.id,
+                "tool": tool_name,
+                "permission": permission,
+                "pattern": pattern,
+            })),
+        };
+        let _ = safety.request_permission(request);
+        // Surface in-session dock for the attached TUI (stdin-style channel).
+        if let Some(tx) = self.permission_request_tx.as_ref() {
+            let _ = tx.send(PermissionUiRequest {
+                request_id: request_id.clone(),
+                tool: tool_name.to_string(),
+                permission: permission.to_string(),
+                pattern: pattern.to_string(),
+                description: description.clone(),
+            });
+        }
+        logging::warn(&format!(
+            "Permission ask queued id={request_id} tool={tool_name} {permission}/{pattern}"
+        ));
+
+        let timeout_secs = crate::config::config().permission.ask_timeout_secs.max(5);
+        let result = safety
+            .wait_for_decision(
+                &request_id,
+                std::time::Duration::from_secs(timeout_secs),
+            )
+            .await;
+
+        match result {
+            crate::safety::PermissionResult::Approved { .. } => {
+                if let Some(decision) = safety.decision_for(&request_id)
+                    && decision.always
+                {
+                    let rule = jcode_permission::Rule::new(
+                        permission,
+                        pattern,
+                        jcode_permission::Action::Allow,
+                    );
+                    self.session_approved_rules.push(rule.clone());
+                    self.session.approved_permission_rules = self.session_approved_rules.clone();
+                    let _ = self.session.save();
+                }
+                Ok(())
+            }
+            crate::safety::PermissionResult::Denied { reason } => Err(anyhow::anyhow!(
+                "Permission denied for tool '{}' ({permission}/{pattern}){}",
+                tool_name,
+                reason
+                    .map(|r| format!(": {r}"))
+                    .unwrap_or_default()
+            )),
+            crate::safety::PermissionResult::Timeout => Err(anyhow::anyhow!(
+                "Permission request timed out for tool '{}' ({permission}/{pattern}). \
+Approve via `jcode permissions` or set [permission] interactive_ask = false.",
+                tool_name
+            )),
+            crate::safety::PermissionResult::Queued { .. } => Err(anyhow::anyhow!(
+                "Permission still pending for tool '{}'",
+                tool_name
+            )),
+        }
     }
 
     pub fn new(provider: Arc<dyn Provider>, registry: Registry) -> Self {

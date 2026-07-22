@@ -358,6 +358,10 @@ pub(super) fn wrapped_input_line_count(
 }
 
 pub(super) fn pending_prompt_count(app: &dyn TuiState) -> usize {
+    let permission_lines = app
+        .permission_prompt_lines()
+        .map(|lines| lines.len())
+        .unwrap_or(0);
     let pending_count = if app.is_processing() {
         app.pending_soft_interrupts().len()
     } else {
@@ -368,11 +372,17 @@ pub(super) fn pending_prompt_count(app: &dyn TuiState) -> usize {
             .interleave_message()
             .map(|msg| !msg.is_empty())
             .unwrap_or(false);
-    app.queued_messages().len() + pending_count + if interleave { 1 } else { 0 }
+    app.queued_messages().len()
+        + pending_count
+        + permission_lines
+        + if interleave { 1 } else { 0 }
 }
 
 pub(super) fn pending_queue_preview(app: &dyn TuiState) -> Vec<String> {
     let mut previews = Vec::new();
+    if let Some(lines) = app.permission_prompt_lines() {
+        previews.extend(lines);
+    }
     if app.is_processing() {
         for msg in app.pending_soft_interrupts() {
             if !msg.is_empty() {
@@ -404,6 +414,29 @@ pub(super) fn pending_queue_preview(app: &dyn TuiState) -> Vec<String> {
 }
 
 pub(super) fn draw_queued(frame: &mut Frame, app: &dyn TuiState, area: Rect, start_num: usize) {
+    // Permission dock is drawn as standalone lines above the queue preview.
+    if let Some(lines) = app.permission_prompt_lines() {
+        let perm_height = lines.len() as u16;
+        if area.height >= perm_height {
+            let perm_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: perm_height,
+            };
+            let styled: Vec<Line> = lines
+                .iter()
+                .map(|line| {
+                    Line::from(Span::styled(
+                        line.clone(),
+                        Style::default().fg(Color::Yellow),
+                    ))
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(styled), perm_area);
+        }
+    }
+
     let mut items: Vec<(QueuedMsgType, &str)> = Vec::new();
     if app.is_processing() {
         for msg in app.pending_soft_interrupts() {

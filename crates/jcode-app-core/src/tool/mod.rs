@@ -28,6 +28,7 @@ mod session_search;
 pub(crate) mod session_search_index;
 mod side_panel;
 mod skill;
+mod task;
 mod todo;
 mod webfetch;
 mod websearch;
@@ -281,6 +282,11 @@ impl Registry {
             &mut tools_map,
             "batch",
             batch::BatchTool::new(registry.clone()),
+        );
+        Self::insert_tool(
+            &mut tools_map,
+            "task",
+            task::TaskTool::new(registry.clone()),
         );
         Self::insert_tool(
             &mut tools_map,

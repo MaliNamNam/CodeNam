@@ -57,6 +57,9 @@ pub mod memory_rerank;
 pub mod memory_types;
 pub mod message;
 pub mod model_pricing;
+pub mod permission {
+    pub use jcode_permission::*;
+}
 pub mod plan;
 pub mod platform;
 pub mod power_inhibit;

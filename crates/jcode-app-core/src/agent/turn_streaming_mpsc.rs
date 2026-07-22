@@ -95,8 +95,12 @@ impl Agent {
         let trace = trace_enabled();
         let mut context_limit_retries = 0u32;
         let mut incomplete_continuations = 0u32;
+        let mut step: u32 = 0;
+        self.doom_loop.reset();
 
         loop {
+            step = step.saturating_add(1);
+            let is_last_step = self.max_steps.is_some_and(|max| step >= max);
             let repaired = self.repair_missing_tool_outputs();
             if repaired > 0 {
                 logging::warn(&format!(
@@ -130,7 +134,16 @@ impl Agent {
                 });
             }
 
-            let tools = self.tool_definitions().await;
+            let tools = if is_last_step {
+                logging::warn(&format!(
+                    "Max steps reached ({}/{}) — tools disabled for final text-only turn",
+                    step,
+                    self.max_steps.unwrap_or(step)
+                ));
+                Vec::new()
+            } else {
+                self.tool_definitions().await
+            };
             let messages: std::sync::Arc<[Message]> = messages.into();
             // Non-blocking memory: uses pending result from last turn, spawns check for next turn
             let memory_pending = self.build_memory_prompt_nonblocking_shared(
@@ -166,6 +179,17 @@ impl Agent {
 
             // Inject memory as a user message at the end (preserves cache prefix)
             let mut messages_with_memory: Vec<Message> = messages.iter().cloned().collect();
+            if is_last_step {
+                messages_with_memory.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Text {
+                        text: jcode_permission::MAX_STEPS_PROMPT.to_string(),
+                        cache_control: None,
+                    }],
+                    timestamp: None,
+                    tool_duration_ms: None,
+                });
+            }
             if let Some(memory) = memory_pending.as_ref() {
                 let memory_count = memory.count.max(1);
                 let computed_age_ms = memory.computed_at.elapsed().as_millis() as u64;
@@ -1217,6 +1241,126 @@ impl Agent {
             // Execute tools and add results
             let tool_count = tool_calls.len();
             let mut tool_results_dirty = false;
+            self.doom_loop.reset();
+
+            // Parallel fast-path for multi read-only tools (OpenCode-style settle).
+            // OpenCode: settle all local tools in parallel, then continue.
+            let can_parallelize = tool_count > 1
+                && tool_count <= super::tools::MAX_PARALLEL_TOOLS
+                && tool_calls.iter().all(|tc| {
+                    super::tools::is_parallel_eligible_tool(&tc.name)
+                        && tc.validation_error().is_none()
+                        && !sdk_tool_results.contains_key(&tc.id)
+                });
+            if can_parallelize {
+                let message_id = assistant_message_id
+                    .clone()
+                    .unwrap_or_else(|| self.session.id.clone());
+                let mut runnable = Vec::new();
+                for tc in &tool_calls {
+                    if self.doom_loop.record(&tc.name, &tc.input) {
+                        let error_msg = jcode_permission::DOOM_LOOP_MESSAGE.to_string();
+                        let _ = event_tx.send(ServerEvent::ToolDone {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            output: error_msg.clone(),
+                            error: Some(error_msg.clone()),
+                        });
+                        self.add_message(
+                            Role::User,
+                            vec![ContentBlock::ToolResult {
+                                tool_use_id: tc.id.clone(),
+                                content: error_msg,
+                                is_error: Some(true),
+                            }],
+                        );
+                        tool_results_dirty = true;
+                        continue;
+                    }
+                    self.enforce_tool_permission(&tc.name, &tc.input).await?;
+                    runnable.push(tc.clone());
+                }
+                let prepared: Vec<_> = runnable
+                    .iter()
+                    .map(|tc| {
+                        let ctx = ToolContext {
+                            session_id: self.session.id.clone(),
+                            message_id: message_id.clone(),
+                            tool_call_id: tc.id.clone(),
+                            working_dir: self.working_dir().map(PathBuf::from),
+                            stdin_request_tx: self.stdin_request_tx.clone(),
+                            graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
+                            execution_mode: ToolExecutionMode::AgentTurn,
+                        };
+                        (
+                            tc.id.clone(),
+                            tc.name.clone(),
+                            tc.input.clone(),
+                            ctx,
+                            self.registry.clone(),
+                        )
+                    })
+                    .collect();
+                let mut stream: futures::stream::FuturesUnordered<_> = prepared
+                    .into_iter()
+                    .map(|(id, name, input, ctx, registry)| async move {
+                        let start = Instant::now();
+                        let result = registry.execute(&name, input, ctx).await;
+                        (id, name, start.elapsed(), result)
+                    })
+                    .collect();
+                let mut ordered = Vec::new();
+                while let Some(item) = stream.next().await {
+                    ordered.push(item);
+                }
+                ordered.sort_by_key(|(id, _, _, _)| {
+                    tool_calls
+                        .iter()
+                        .position(|tc| tc.id == *id)
+                        .unwrap_or(usize::MAX)
+                });
+                for (id, name, elapsed, result) in ordered {
+                    crate::telemetry::record_tool_call();
+                    match result {
+                        Ok(output) => {
+                            let output = cap_tool_output_for_history(&name, output);
+                            let _ = event_tx.send(ServerEvent::ToolDone {
+                                id: id.clone(),
+                                name: name.clone(),
+                                output: output.output.clone(),
+                                error: None,
+                            });
+                            let blocks = tool_output_to_content_blocks(id, output);
+                            self.add_message_with_duration(
+                                Role::User,
+                                blocks,
+                                Some(elapsed.as_millis() as u64),
+                            );
+                            tool_results_dirty = true;
+                        }
+                        Err(e) => {
+                            crate::telemetry::record_tool_failure();
+                            let error_msg = format!("Error: {e}");
+                            let _ = event_tx.send(ServerEvent::ToolDone {
+                                id: id.clone(),
+                                name,
+                                output: error_msg.clone(),
+                                error: Some(error_msg.clone()),
+                            });
+                            self.add_message_with_duration(
+                                Role::User,
+                                vec![ContentBlock::ToolResult {
+                                    tool_use_id: id,
+                                    content: error_msg,
+                                    is_error: Some(true),
+                                }],
+                                Some(elapsed.as_millis() as u64),
+                            );
+                            tool_results_dirty = true;
+                        }
+                    }
+                }
+            } else {
             for tool_index in 0..tool_count {
                 // === INJECTION POINT C (before): Check for urgent abort before each tool (except first) ===
                 if tool_index > 0 && self.has_urgent_interrupt() {
@@ -1281,7 +1425,31 @@ impl Agent {
                     continue;
                 }
 
-                self.validate_tool_allowed(&tc.name)?;
+                if self.doom_loop.record(&tc.name, &tc.input) {
+                    let error_msg = jcode_permission::DOOM_LOOP_MESSAGE.to_string();
+                    logging::warn(&format!(
+                        "Doom loop blocked tool '{}' with identical input",
+                        tc.name
+                    ));
+                    let _ = event_tx.send(ServerEvent::ToolDone {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        output: error_msg.clone(),
+                        error: Some(error_msg.clone()),
+                    });
+                    self.add_message(
+                        Role::User,
+                        vec![ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: error_msg,
+                            is_error: Some(true),
+                        }],
+                    );
+                    tool_results_dirty = true;
+                    continue;
+                }
+
+                self.enforce_tool_permission(&tc.name, &tc.input).await?;
 
                 let is_native_tool = JCODE_NATIVE_TOOLS.contains(&tc.name.as_str());
 
@@ -1550,6 +1718,7 @@ impl Agent {
                 // place user text between tool_results, which may violate API constraints.
                 // All non-urgent injection happens at Point D after all tools are done.
             }
+            } // end serial else (non-parallel path)
 
             if tool_results_dirty {
                 self.session.save()?;

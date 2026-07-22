@@ -12,6 +12,13 @@ ios_simulator_screenshot.png
 target-ttest/
 target-ttest*/
 
+# Local project JSON configs may contain provider keys or secrets.
+# Commit CodeNam.json.example only.
+/CodeNam.json
+/CodeNam.jsonc
+/opencode.json
+/opencode.jsonc
+
 # Stray experiment/debug artifacts at the repo root. Real assets live under
 # assets/, docs/, ios/, and tests/ and are committed explicitly.
 /*.log

@@ -228,6 +228,8 @@ impl Agent {
             "last_upstream_provider": self.last_upstream_provider,
             "last_connection_type": self.last_connection_type,
             "active_skill": self.active_skill,
+            "agent_profile": self.agent_profile_name,
+            "max_steps": self.max_steps,
             "allowed_tools": self.allowed_tools,
             "disabled_tools": self.disabled_tools,
             "session": {

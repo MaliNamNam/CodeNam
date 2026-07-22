@@ -188,7 +188,7 @@ pub(super) async fn execute_debug_command(
         } else {
             serde_json::from_str::<serde_json::Value>(input_raw)?
         };
-        let agent = agent.lock().await;
+        let mut agent = agent.lock().await;
         let output = agent.execute_tool(name, input).await?;
         let payload = serde_json::json!({
             "output": output.output,
@@ -283,7 +283,7 @@ pub(super) async fn execute_debug_command(
             .map_err(|e| anyhow::anyhow!("Invalid JSON: {}", e))?;
         input["action"] = serde_json::json!("connect");
         input["server"] = serde_json::json!(server_name);
-        let agent = agent.lock().await;
+        let mut agent = agent.lock().await;
         let result = agent.execute_tool("mcp", input).await?;
         return Ok(result.output);
     }
@@ -291,7 +291,7 @@ pub(super) async fn execute_debug_command(
     if let Some(server_name) = trimmed.strip_prefix("mcp:disconnect:") {
         let server_name = server_name.trim();
         let input = serde_json::json!({"action": "disconnect", "server": server_name});
-        let agent = agent.lock().await;
+        let mut agent = agent.lock().await;
         let result = agent.execute_tool("mcp", input).await?;
         return Ok(result.output);
     }
@@ -317,7 +317,7 @@ pub(super) async fn execute_debug_command(
         let tool_name = format!("mcp__{}__{}", server, tool);
         let input: serde_json::Value =
             serde_json::from_str(args_json).map_err(|e| anyhow::anyhow!("Invalid JSON: {}", e))?;
-        let agent = agent.lock().await;
+        let mut agent = agent.lock().await;
         let result = agent.execute_tool(&tool_name, input).await?;
         return Ok(result.output);
     }

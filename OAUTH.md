@@ -81,7 +81,7 @@ OAuth. The remapped names are:
 - `edit` → `Edit`
 - `glob` → `Glob`
 - `grep` → `Grep`
-- `subagent` → `Agent`
+- `task` → `Agent` (aliases: `subagent`, `task_runner`)
 - `schedule` → `ScheduleWakeup`
 - `skill_manage` → `Skill`
 

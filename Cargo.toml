@@ -1,6 +1,6 @@
 [package]
 name = "jcode"
-version = "0.54.4"
+version = "0.0.1"
 description = "Possibly the greatest coding agent ever built — blazing-fast TUI, multi-model, swarm coordination, 30+ tools"
 edition = "2024"
 autobins = false
@@ -9,6 +9,7 @@ autobins = false
 members = [
     ".",
     "crates/jcode-agent-runtime",
+    "crates/jcode-permission",
     "crates/jcode-app-core",
     "crates/jcode-base",
     "crates/jcode-tui",

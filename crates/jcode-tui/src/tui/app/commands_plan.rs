@@ -58,6 +58,10 @@ pub(super) fn plan_launch_notice(goal: Option<&str>, interrupted: bool) -> Strin
 }
 
 pub(super) fn handle_plan_command_local(app: &mut App, command: PlanCommand) {
+    // Hard capability switch even in local/test harness (not prompt-only).
+    app.session.agent_profile = Some("plan".to_string());
+    let _ = app.session.save();
+    app.push_display_message(DisplayMessage::system(build_profile_notice("plan")));
     let prompt = build_plan_prompt(command.goal.as_deref());
     if app.is_processing {
         interrupt_and_queue_synthetic_message(
@@ -73,6 +77,32 @@ pub(super) fn handle_plan_command_local(app: &mut App, command: PlanCommand) {
         )));
         start_synthetic_user_turn(app, prompt);
     }
+}
+
+/// Parsed `/build` — switch back to the full coding agent profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct BuildCommand;
+
+pub(super) fn parse_build_command(trimmed: &str) -> Option<BuildCommand> {
+    let rest = trimmed.strip_prefix("/build")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(BuildCommand)
+}
+
+pub(super) fn build_profile_notice(profile: &str) -> String {
+    match profile {
+        "plan" => "🧭 Agent profile: plan (write/edit tools denied)".to_string(),
+        "build" => "🔨 Agent profile: build (full tools)".to_string(),
+        other => format!("Agent profile: {other}"),
+    }
+}
+
+pub(super) fn handle_build_command_local(app: &mut App) {
+    app.session.agent_profile = Some("build".to_string());
+    let _ = app.session.save();
+    app.push_display_message(DisplayMessage::system(build_profile_notice("build")));
 }
 
 #[cfg(test)]

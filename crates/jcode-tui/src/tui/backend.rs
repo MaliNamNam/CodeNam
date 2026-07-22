@@ -705,6 +705,16 @@ impl RemoteConnection {
         self.send_request(request).await
     }
 
+    /// Switch the server-side agent profile (`build`, `plan`, …).
+    pub async fn set_agent_profile(&mut self, profile: String) -> Result<()> {
+        let request = Request::SetAgentProfile {
+            id: self.next_request_id,
+            profile,
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await
+    }
+
     /// Launch a subagent immediately on the active remote session.
     pub async fn run_subagent(
         &mut self,
@@ -827,6 +837,23 @@ impl RemoteConnection {
             id: self.next_request_id,
             request_id: request_id.to_string(),
             input: input.to_string(),
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await
+    }
+
+    /// Reply to an in-session permission ask (`once` | `always` | `deny`).
+    pub async fn send_permission_response(
+        &mut self,
+        request_id: &str,
+        decision: &str,
+        message: Option<String>,
+    ) -> Result<()> {
+        let request = Request::PermissionResponse {
+            id: self.next_request_id,
+            request_id: request_id.to_string(),
+            decision: decision.to_string(),
+            message,
         };
         self.next_request_id += 1;
         self.send_request(request).await

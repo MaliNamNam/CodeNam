@@ -413,6 +413,9 @@ pub enum NamedProviderAuth {
 #[serde(default)]
 pub struct NamedProviderModelConfig {
     pub id: String,
+    /// Optional human label for the picker (OpenCode `name` field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(
         default,
         alias = "context_limit",
@@ -585,6 +588,27 @@ pub struct AgentsConfig {
     /// Env override: `JCODE_SWARM_MAX_CONCURRENT_AGENTS`.
     #[serde(default = "default_swarm_max_concurrent_agents")]
     pub swarm_max_concurrent_agents: usize,
+    /// Default primary agent profile: `"build"` (full) or `"plan"` (read-mostly).
+    /// Env override: `JCODE_DEFAULT_AGENT`.
+    #[serde(default = "default_agent_profile")]
+    pub default_agent: String,
+    /// Max agent loop steps (tool rounds) per user message. Unset = unlimited.
+    /// On the final step tools are stripped and a text-only summary is forced.
+    /// Env override: `JCODE_MAX_STEPS`.
+    #[serde(default)]
+    pub max_steps: Option<u32>,
+    /// Max nesting depth for the lightweight `task` subagent tool (default 1).
+    /// Env override: `JCODE_SUBAGENT_DEPTH`.
+    #[serde(default = "default_subagent_depth")]
+    pub subagent_depth: usize,
+}
+
+fn default_agent_profile() -> String {
+    "build".to_string()
+}
+
+fn default_subagent_depth() -> usize {
+    1
 }
 
 fn default_swarm_max_concurrent_agents() -> usize {
@@ -628,6 +652,9 @@ impl Default for AgentsConfig {
             memory_embedding_base_url: None,
             memory_embedding_dim: None,
             swarm_max_concurrent_agents: default_swarm_max_concurrent_agents(),
+            default_agent: default_agent_profile(),
+            max_steps: None,
+            subagent_depth: default_subagent_depth(),
         }
     }
 }
@@ -1423,6 +1450,57 @@ impl Default for NotificationsConfig {
             turn_complete_todo_min_secs: 30,
             turn_complete_only_when_unfocused: true,
             turn_complete_sound: "Glass".to_string(),
+        }
+    }
+}
+
+/// Interactive permission / ruleset configuration (OpenCode-style harness).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PermissionConfig {
+    /// When true, `CheckResult::Ask` blocks the tool loop and waits on the
+    /// safety queue (approve/deny via `jcode permissions` or notifications).
+    /// Default true so interactive sessions get real human-in-the-loop.
+    #[serde(default = "default_permission_interactive_ask")]
+    pub interactive_ask: bool,
+    /// Max seconds to wait for an interactive permission decision.
+    #[serde(default = "default_permission_ask_timeout_secs")]
+    pub ask_timeout_secs: u64,
+    /// Extra rules merged after the agent profile (last match wins).
+    /// Each entry: `{ permission = "edit", pattern = "src/**", action = "allow" }`.
+    #[serde(default)]
+    pub rules: Vec<PermissionRuleConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRuleConfig {
+    pub permission: String,
+    #[serde(default = "default_permission_pattern")]
+    pub pattern: String,
+    /// `allow` | `ask` | `deny`
+    pub action: String,
+}
+
+fn default_permission_interactive_ask() -> bool {
+    // OpenCode-style default: Ask rules block until the user decides.
+    // Disable only for headless/CI: interactive_ask = false or JCODE_INTERACTIVE_ASK=0.
+    true
+}
+
+fn default_permission_ask_timeout_secs() -> u64 {
+    300
+}
+
+fn default_permission_pattern() -> String {
+    "*".to_string()
+}
+
+impl Default for PermissionConfig {
+    fn default() -> Self {
+        Self {
+            interactive_ask: default_permission_interactive_ask(),
+            ask_timeout_secs: default_permission_ask_timeout_secs(),
+            rules: Vec::new(),
         }
     }
 }

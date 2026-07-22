@@ -10,7 +10,8 @@ pub use jcode_config_types::{
     LatexRenderingMode, LaunchHotkeyEntry, LaunchHotkeysConfig, MarkdownSpacingMode,
     NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig, NamedProviderType,
     NativeScrollbarConfig, NotificationsConfig, OverscrollStatusMode, PowerConfig, ProviderConfig,
-    ReasoningDisplayMode, SafetyConfig, SessionPickerResumeAction, SponsorsConfig, SwarmSpawnMode,
+    PermissionConfig, PermissionRuleConfig, ReasoningDisplayMode, SafetyConfig,
+    SessionPickerResumeAction, SponsorsConfig, SwarmSpawnMode,
     SwarmStripLayout, TerminalConfig, UpdateChannel, WebSearchConfig, WebSearchEngine,
 };
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,7 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_COPILOT_PREMIUM",
     "JCODE_CROSS_PROVIDER_FAILOVER",
     "JCODE_DEBUG_SOCKET",
+    "JCODE_DEFAULT_AGENT",
     "JCODE_DICTATION_COMMAND",
     "JCODE_DICTATION_KEY",
     "JCODE_DICTATION_MODE",
@@ -90,6 +92,7 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_IDLE_ANIMATION",
     "JCODE_IMAP_HOST",
     "JCODE_INFO_WIDGET_TOGGLE_KEY",
+    "JCODE_INTERACTIVE_ASK",
     "JCODE_JADE_RELAY_API_BASE",
     "JCODE_JADE_RELAY_ENABLED",
     "JCODE_JADE_RELAY_LAUNCH_ENABLED",
@@ -102,6 +105,7 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_KV_CACHE_MISS_NOTICES",
     "JCODE_LATEX_RENDERING",
     "JCODE_MARKDOWN_SPACING",
+    "JCODE_MAX_STEPS",
     "JCODE_MEMORY_EMBEDDING_BACKEND",
     "JCODE_MEMORY_EMBEDDING_BASE_URL",
     "JCODE_MEMORY_EMBEDDING_DIM",
@@ -127,6 +131,7 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_ANTHROPIC_REASONING_EFFORT",
     "JCODE_PRESERVE_REASONING_CONTEXT",
     "JCODE_PERFORMANCE",
+    "JCODE_PERMISSION_ASK_TIMEOUT_SECS",
     "JCODE_PIN_IMAGES",
     "JCODE_PREVENT_SLEEP_WHILE_STREAMING",
     "JCODE_PROVIDER",
@@ -153,6 +158,7 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_SMTP_PASSWORD",
     "JCODE_SPAWN_HOOK",
     "JCODE_STREAM_IDLE_TIMEOUT_SECS",
+    "JCODE_SUBAGENT_DEPTH",
     "JCODE_SWARM_ENABLED",
     "JCODE_SWARM_MODEL",
     "JCODE_SWARM_MAX_CONCURRENT_AGENTS",
@@ -187,13 +193,18 @@ impl ConfigCacheFingerprint {
     fn current() -> Self {
         let path = Config::path();
         let metadata = path.as_ref().and_then(|path| std::fs::metadata(path).ok());
+        // Include CodeNam.json / opencode.json so edits reload the process cache.
+        let json_fp = opencode_import::json_config_fingerprint();
+        let mut env = config_env_fingerprint();
+        env.extend(json_fp);
+        env.sort();
         Self {
             path,
             modified: metadata
                 .as_ref()
                 .and_then(|metadata| metadata.modified().ok()),
             len: metadata.as_ref().map(std::fs::Metadata::len),
-            env: config_env_fingerprint(),
+            env,
         }
     }
 }
@@ -486,6 +497,9 @@ pub struct Config {
     /// Ambient mode configuration
     pub ambient: AmbientConfig,
 
+    /// Interactive permission ruleset configuration
+    pub permission: PermissionConfig,
+
     /// Safety / notification configuration
     pub safety: SafetyConfig,
 
@@ -695,6 +709,7 @@ mod config_file;
 mod default_file;
 mod display_summary;
 mod env_overrides;
+mod opencode_import;
 
 #[cfg(test)]
 #[path = "config_tests.rs"]

@@ -318,6 +318,10 @@ pub trait TuiState {
     fn connected_clients(&self) -> Option<usize>;
     /// Short-lived notice shown in the status line (e.g., model switch, toggle diff)
     fn status_notice(&self) -> Option<String>;
+    /// In-session permission dock lines (if agent is blocked on ask).
+    fn permission_prompt_lines(&self) -> Option<Vec<String>> {
+        None
+    }
     /// Distinct learned-keybinding nudge shown in its own pop-out color, e.g.
     /// "you usually do X the slow way, press <key>". Separate from
     /// [`status_notice`] so the UI can style it differently.

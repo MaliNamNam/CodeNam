@@ -63,6 +63,7 @@ open = "5"               # Open URLs in browser
 jcode-auth-types = { path = "../jcode-auth-types" }
 jcode-azure-auth = { path = "../jcode-azure-auth" }
 jcode-agent-runtime = { path = "../jcode-agent-runtime" }
+jcode-permission = { path = "../jcode-permission" }
 jcode-provider-metadata = { path = "../jcode-provider-metadata" }
 jcode-provider-env = { path = "../jcode-provider-env" }
 jcode-provider-core = { path = "../jcode-provider-core" }

@@ -11,6 +11,8 @@ impl Config {
     /// Load config from file, with environment variable overrides
     pub fn load() -> Self {
         let mut config = Self::load_from_file().unwrap_or_default();
+        // Project/global CodeNam.json / opencode.json (OpenCode-compatible).
+        super::opencode_import::apply_discovered_json_layers(&mut config);
         config.apply_env_overrides();
         config
     }
@@ -21,6 +23,7 @@ impl Config {
     /// to distinguish a malformed config from an absent config.
     pub fn load_strict() -> anyhow::Result<Self> {
         let mut config = Self::load_from_file_strict()?.unwrap_or_default();
+        super::opencode_import::apply_discovered_json_layers(&mut config);
         config.apply_env_overrides();
         Ok(config)
     }

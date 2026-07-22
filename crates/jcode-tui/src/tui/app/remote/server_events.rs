@@ -2791,6 +2791,29 @@ pub(in crate::tui::app) fn handle_server_event(
             app.set_status_notice("⌨ Interactive terminal detected (command will timeout)");
             false
         }
+        ServerEvent::PermissionRequest {
+            request_id,
+            tool,
+            permission,
+            pattern,
+            description,
+            ..
+        } => {
+            app.permission_queue.push(super::super::PermissionPromptItem {
+                request_id,
+                tool,
+                permission,
+                pattern,
+                description,
+            });
+            let n = app.permission_queue.len();
+            app.set_status_notice(if n == 1 {
+                "Permission required — y once · a always · n deny".to_string()
+            } else {
+                format!("Permission required (+{} waiting) — y / a / n", n - 1)
+            });
+            true
+        }
         _ => false,
     }
 }

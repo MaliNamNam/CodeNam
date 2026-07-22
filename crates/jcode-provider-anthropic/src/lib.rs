@@ -274,7 +274,7 @@ pub fn format_content_blocks(blocks: &[ContentBlock], is_oauth: bool) -> Vec<Api
 /// (which the Anthropic subscription endpoint expects) instead of the raw
 /// registry definitions; every other tool is forwarded as-is (see #409).
 const OAUTH_BUILTIN_LOCAL_TOOLS: &[&str] = &[
-    "subagent",
+    "task",
     "bash",
     "edit",
     "glob",
@@ -990,7 +990,7 @@ mod cache_prefix_invariant_tests {
         let registry = vec![
             tool_def("bash"),
             tool_def("read"),
-            tool_def("subagent"),
+            tool_def("task"),
             tool_def("websearch"),
             tool_def("webfetch"),
             tool_def("browser"),

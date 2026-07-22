@@ -359,6 +359,34 @@ swarm_spawn_mode = "inline"
 # Env override: JCODE_SWARM_MAX_CONCURRENT_AGENTS
 swarm_max_concurrent_agents = 32
 #
+# Default primary agent profile for new root sessions:
+#   "build" - full coding agent (default)
+#   "plan"  - read-mostly planning; write/edit tools hard-denied
+# Env override: JCODE_DEFAULT_AGENT
+# default_agent = "build"
+#
+# Max tool-loop steps per user message. Unset = unlimited. On the final step
+# tools are stripped and the model must return a text-only summary.
+# Env override: JCODE_MAX_STEPS
+# max_steps = 50
+#
+# Nesting depth for the lightweight `task` subagent tool (default 1 = children
+# cannot spawn further tasks). Swarm multi-agent coordination is separate.
+# Env override: JCODE_SUBAGENT_DEPTH
+# subagent_depth = 1
+
+[permission]
+# Ask rules (doom_loop, external_directory, .env, …) block until approved in the
+# session permission dock (or `jcode permissions`). Default true (OpenCode path).
+# Set false only for headless/CI. Env: JCODE_INTERACTIVE_ASK
+interactive_ask = true
+# ask_timeout_secs = 300
+# Optional extra rules (last match wins), e.g.:
+# [[permission.rules]]
+# permission = "edit"
+# pattern = "src/**"
+# action = "allow"
+
 # Max percentage (1-90) of the chat height the inline swarm gallery band may use.
 # Unset = built-in default (40%). Lower values keep more transcript visible; set
 # near the minimum to collapse the gallery to a thin strip.

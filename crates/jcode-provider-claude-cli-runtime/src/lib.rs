@@ -1133,7 +1133,7 @@ fn to_internal_tool_name(name: &str) -> String {
         "SkillManage" => "skill_manage",
         "ConversationSearch" => "conversation_search",
         "Lsp" => "lsp",
-        "Task" => "subagent",
+        "Task" => "task",
         "Todo" | "TodoWrite" | "TodoRead" => "todo",
         "Batch" => "batch",
         _ => name,

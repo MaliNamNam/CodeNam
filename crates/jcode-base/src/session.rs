@@ -122,6 +122,12 @@ pub struct Session {
     /// Optional fixed model to use for subagents launched from this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_model: Option<String>,
+    /// Active primary agent profile (`build`, `plan`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
+    /// Session-scoped "always allow" permission rules (from interactive ask).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approved_permission_rules: Vec<jcode_permission::Rule>,
     /// Last requested `/improve` mode for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub improve_mode: Option<SessionImproveMode>,
@@ -211,6 +217,10 @@ struct SessionStartupStub {
     reasoning_effort: Option<String>,
     #[serde(default)]
     subagent_model: Option<String>,
+    #[serde(default)]
+    agent_profile: Option<String>,
+    #[serde(default)]
+    approved_permission_rules: Vec<jcode_permission::Rule>,
     #[serde(default)]
     improve_mode: Option<SessionImproveMode>,
     #[serde(default)]
@@ -318,6 +328,8 @@ impl Session {
         session.route_api_method = stub.route_api_method;
         session.reasoning_effort = stub.reasoning_effort;
         session.subagent_model = stub.subagent_model;
+        session.agent_profile = stub.agent_profile;
+        session.approved_permission_rules = stub.approved_permission_rules;
         session.improve_mode = stub.improve_mode;
         session.autoreview_enabled = stub.autoreview_enabled;
         session.autojudge_enabled = stub.autojudge_enabled;
@@ -353,6 +365,8 @@ impl Session {
         session.route_api_method = snapshot.route_api_method;
         session.reasoning_effort = snapshot.reasoning_effort;
         session.subagent_model = snapshot.subagent_model;
+        session.agent_profile = snapshot.agent_profile;
+        session.approved_permission_rules = snapshot.approved_permission_rules;
         session.improve_mode = snapshot.improve_mode;
         session.autoreview_enabled = snapshot.autoreview_enabled;
         session.autojudge_enabled = snapshot.autojudge_enabled;
@@ -490,6 +504,8 @@ impl Session {
             model: self.model.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
             subagent_model: self.subagent_model.clone(),
+            agent_profile: self.agent_profile.clone(),
+            approved_permission_rules: self.approved_permission_rules.clone(),
             improve_mode: self.improve_mode,
             autoreview_enabled: self.autoreview_enabled,
             autojudge_enabled: self.autojudge_enabled,
@@ -691,6 +707,8 @@ impl Session {
         self.model = meta.model;
         self.reasoning_effort = meta.reasoning_effort;
         self.subagent_model = meta.subagent_model;
+        self.agent_profile = meta.agent_profile;
+        self.approved_permission_rules = meta.approved_permission_rules;
         self.improve_mode = meta.improve_mode;
         self.autoreview_enabled = meta.autoreview_enabled;
         self.autojudge_enabled = meta.autojudge_enabled;
@@ -731,6 +749,8 @@ impl Session {
             route_api_method: None,
             reasoning_effort: None,
             subagent_model: None,
+            agent_profile: None,
+            approved_permission_rules: Vec::new(),
             improve_mode: None,
             autoreview_enabled: None,
             autojudge_enabled: None,
@@ -785,6 +805,8 @@ impl Session {
             route_api_method: None,
             reasoning_effort: None,
             subagent_model: None,
+            agent_profile: None,
+            approved_permission_rules: Vec::new(),
             improve_mode: None,
             autoreview_enabled: None,
             autojudge_enabled: None,
@@ -1588,6 +1610,10 @@ struct RemoteStartupSessionSnapshot {
     reasoning_effort: Option<String>,
     #[serde(default)]
     subagent_model: Option<String>,
+    #[serde(default)]
+    agent_profile: Option<String>,
+    #[serde(default)]
+    approved_permission_rules: Vec<jcode_permission::Rule>,
     #[serde(default)]
     improve_mode: Option<SessionImproveMode>,
     #[serde(default)]

@@ -1,7 +1,8 @@
 use super::client_actions::{
     AgentTaskContext, NotifySessionContext, handle_agent_task, handle_compact, handle_input_shell,
     handle_notify_session, handle_rename_session, handle_run_subagent, handle_set_feature,
-    handle_set_subagent_model, handle_split, handle_stdin_response, handle_transfer,
+    handle_permission_response, handle_set_agent_profile, handle_set_subagent_model, handle_split,
+    handle_stdin_response, handle_transfer,
     handle_trigger_memory_extraction,
 };
 use super::client_comm::{
@@ -636,9 +637,12 @@ pub(super) async fn handle_client(
     // Set up stdin request forwarding: tools send StdinInputRequest, we forward to TUI
     let (stdin_req_tx, mut stdin_req_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::tool::StdinInputRequest>();
+    let (permission_req_tx, mut permission_req_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::agent::PermissionUiRequest>();
     {
         let mut agent_guard = agent.lock().await;
         agent_guard.set_stdin_request_tx(stdin_req_tx);
+        agent_guard.set_permission_request_tx(permission_req_tx);
     }
     let _stdin_forwarder = {
         let client_event_tx = client_event_tx.clone();
@@ -656,6 +660,21 @@ pub(super) async fn handle_client(
                     prompt: req.prompt,
                     is_password: req.is_password,
                     tool_call_id: tool_call_id.clone(),
+                });
+            }
+        })
+    };
+    let _permission_forwarder = {
+        let client_event_tx = client_event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(req) = permission_req_rx.recv().await {
+                let _ = client_event_tx.send(ServerEvent::PermissionRequest {
+                    request_id: req.request_id,
+                    tool: req.tool,
+                    permission: req.permission,
+                    pattern: req.pattern,
+                    description: req.description,
+                    urgency: Some("normal".to_string()),
                 });
             }
         })
@@ -1717,6 +1736,20 @@ pub(super) async fn handle_client(
                 handle_set_subagent_model(id, model, &agent, &client_event_tx).await;
             }
 
+            Request::SetAgentProfile { id, profile } => {
+                if reject_if_agent_busy_for_request(
+                    id,
+                    "set_agent_profile",
+                    &client_session_id,
+                    client_is_processing,
+                    &agent,
+                    &client_event_tx,
+                ) {
+                    continue;
+                }
+                handle_set_agent_profile(id, profile, &agent, &client_event_tx).await;
+            }
+
             Request::RunSubagent {
                 id,
                 prompt,
@@ -1901,6 +1934,16 @@ pub(super) async fn handle_client(
                 input,
             } => {
                 handle_stdin_response(id, request_id, input, &stdin_responses, &client_event_tx)
+                    .await;
+            }
+
+            Request::PermissionResponse {
+                id,
+                request_id,
+                decision,
+                message,
+            } => {
+                handle_permission_response(id, request_id, decision, message, &client_event_tx)
                     .await;
             }
 

@@ -494,15 +494,26 @@ fn named_provider_profile_routes(
     profile_name: &str,
     profile_config: &crate::config::NamedProviderConfig,
 ) -> Vec<ModelRoute> {
-    let mut models: Vec<String> = profile_config
+    // (api_model_id, optional display label for detail)
+    let mut models: Vec<(String, Option<String>)> = profile_config
         .models
         .iter()
         .filter(|model| {
             // `input` empty means unspecified (assume text-capable).
             model.input.is_empty() || model.input.iter().any(|input| input == "text")
         })
-        .map(|model| model.id.trim().to_string())
-        .filter(|id| !id.is_empty())
+        .map(|model| {
+            (
+                model.id.trim().to_string(),
+                model
+                    .name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+            )
+        })
+        .filter(|(id, _)| !id.is_empty())
         .collect();
     if models.is_empty()
         && let Some(default_model) = profile_config
@@ -511,27 +522,32 @@ fn named_provider_profile_routes(
             .map(str::trim)
             .filter(|model| !model.is_empty())
     {
-        models.push(default_model.to_string());
+        models.push((default_model.to_string(), None));
     }
 
     let api_method = format!("openai-compatible:{}", profile_name);
-    let detail = if profile_config.base_url.trim().is_empty() {
+    let base = if profile_config.base_url.trim().is_empty() {
         "configured provider profile".to_string()
     } else {
         profile_config.base_url.trim().to_string()
     };
 
     let mut routes: Vec<ModelRoute> = Vec::new();
-    for model in models {
+    for (model, display_name) in models {
         if !is_listable_model_name(&model) || routes.iter().any(|route| route.model == model) {
             continue;
         }
+        // Surface local/OpenCode profiles clearly vs OpenRouter clones of similar names.
+        let detail = match display_name {
+            Some(label) => format!("{label} · {profile_name} · {base}"),
+            None => format!("{profile_name} · {base}"),
+        };
         routes.push(ModelRoute {
             model,
             provider: profile_name.to_string(),
             api_method: api_method.clone(),
             available: true,
-            detail: detail.clone(),
+            detail,
             cheapness: None,
         });
     }

@@ -115,6 +115,20 @@ impl Agent {
             working_dir.as_deref(),
         );
 
+        if let Some(overlay) = self
+            .agent_prompt_overlay
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            if !split.dynamic_part.is_empty() {
+                split.dynamic_part.push_str("\n\n");
+            }
+            split
+                .dynamic_part
+                .push_str(&format!("# Agent Profile ({})\n\n{}", self.agent_profile_name, overlay));
+        }
+
         self.append_current_turn_system_reminder(&mut split);
         crate::prompt::append_swarm_effort_directive(
             &mut split,

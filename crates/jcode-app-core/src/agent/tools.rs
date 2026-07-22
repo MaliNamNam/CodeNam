@@ -2,6 +2,17 @@ use crate::message::{ContentBlock, ToolCall};
 use crate::tool::ToolOutput;
 
 pub(super) const MAX_TOOL_OUTPUT_CHARS_FOR_HISTORY: usize = 512 * 1024;
+/// Cap concurrent tools in one assistant multi-tool batch (OpenCode-style settle).
+pub(super) const MAX_PARALLEL_TOOLS: usize = 10;
+
+/// OpenCode parallelizes **all** local tools in a turn (eager settle, join barrier).
+/// We exclude only meta tools that fan out or recurse into more tool execution.
+pub(super) fn is_parallel_eligible_tool(name: &str) -> bool {
+    !matches!(
+        jcode_tool_types::resolve_tool_name(name),
+        "batch" | "task" | "subagent" | "swarm" | "communicate"
+    )
+}
 
 pub(super) fn cap_tool_output_for_history(tool_name: &str, mut output: ToolOutput) -> ToolOutput {
     if output.output.chars().count() <= MAX_TOOL_OUTPUT_CHARS_FOR_HISTORY {

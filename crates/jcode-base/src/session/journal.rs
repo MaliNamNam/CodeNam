@@ -20,6 +20,10 @@ pub(super) struct SessionJournalMeta {
     #[serde(default)]
     pub(super) reasoning_effort: Option<String>,
     pub(super) subagent_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) agent_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) approved_permission_rules: Vec<jcode_permission::Rule>,
     pub(super) improve_mode: Option<SessionImproveMode>,
     pub(super) autoreview_enabled: Option<bool>,
     pub(super) autojudge_enabled: Option<bool>,
@@ -80,6 +84,8 @@ pub(super) fn metadata_requires_snapshot(
         || prev.provider_key != current.provider_key
         || prev.reasoning_effort != current.reasoning_effort
         || prev.subagent_model != current.subagent_model
+        || prev.agent_profile != current.agent_profile
+        || prev.approved_permission_rules != current.approved_permission_rules
         || prev.improve_mode != current.improve_mode
         || prev.autoreview_enabled != current.autoreview_enabled
         || prev.autojudge_enabled != current.autojudge_enabled

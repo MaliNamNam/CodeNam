@@ -914,6 +914,43 @@ impl crate::tui::TuiState for App {
         })
     }
 
+    fn permission_prompt_lines(&self) -> Option<Vec<String>> {
+        if self.permission_queue.is_empty() {
+            return None;
+        }
+        let q = &self.permission_queue;
+        let p = q.current()?;
+        let n = q.len();
+        let once = if q.selected == super::PermissionPromptChoice::Once {
+            "[Once]"
+        } else {
+            " Once "
+        };
+        let always = if q.selected == super::PermissionPromptChoice::Always {
+            "[Always]"
+        } else {
+            " Always "
+        };
+        let deny = if q.selected == super::PermissionPromptChoice::Deny {
+            "[Deny]"
+        } else {
+            " Deny "
+        };
+        // OpenCode: one dock; optional count if more are waiting behind it.
+        let header = if n > 1 {
+            format!("⚠ Permission ({} waiting)", n)
+        } else {
+            "⚠ Permission required".to_string()
+        };
+        Some(vec![
+            header,
+            format!("  {}", p.description),
+            format!("  tool={}  {} / {}", p.tool, p.permission, p.pattern),
+            format!("  {once}  {always}  {deny}"),
+            "  y once · a always · n deny · ←→ · Enter".to_string(),
+        ])
+    }
+
     fn learn_hint(&self) -> Option<String> {
         self.learn_hint.as_ref().and_then(|(text, at)| {
             // Learn-hints linger a little longer than status notices so the user

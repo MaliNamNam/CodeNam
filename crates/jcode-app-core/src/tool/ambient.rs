@@ -65,6 +65,11 @@ fn get_safety_system() -> Arc<SafetySystem> {
         .unwrap_or_else(|| Arc::new(SafetySystem::new()))
 }
 
+/// Shared safety system for interactive permission asks (main agent + ambient).
+pub fn shared_safety_system() -> Arc<SafetySystem> {
+    get_safety_system()
+}
+
 fn ambient_session_ids() -> &'static Mutex<HashSet<String>> {
     AMBIENT_SESSION_IDS.get_or_init(|| Mutex::new(HashSet::new()))
 }

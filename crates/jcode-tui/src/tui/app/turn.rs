@@ -71,7 +71,15 @@ impl App {
                 self.handle_compaction_event(event);
             }
 
-            let tools = self.registry.definitions(None).await;
+            let mut tools = self.registry.definitions(None).await;
+            // Honor session agent profile hard denylists (local /plan path).
+            if self.session.agent_profile.as_deref() == Some("plan") {
+                let deny = crate::permission::AgentProfile::plan_tool_denylist();
+                tools.retain(|t| !deny.contains(&t.name));
+            } else if self.session.agent_profile.as_deref() == Some("explore") {
+                let allow = crate::permission::AgentProfile::explore_tool_allowlist();
+                tools.retain(|t| allow.contains(&t.name));
+            }
             // Non-blocking memory: uses pending result from last turn, spawns check for next turn
             let memory_pending = self.build_memory_prompt_nonblocking(&provider_messages);
             // Use split prompt for better caching - static content cached, dynamic not

@@ -281,7 +281,7 @@ pub fn anthropic_map_tool_name_for_oauth(name: &str) -> String {
         "edit" => "Edit",
         "glob" => "Glob",
         "grep" => "Grep",
-        "subagent" => "Agent",
+        "task" | "subagent" => "Agent",
         "schedule" => "ScheduleWakeup",
         "skill_manage" => "Skill",
         _ => name,
@@ -297,7 +297,7 @@ pub fn anthropic_map_tool_name_from_oauth(name: &str) -> String {
         "Edit" => "edit",
         "Glob" => "glob",
         "Grep" => "grep",
-        "Agent" => "subagent",
+        "Agent" => "task",
         "ScheduleWakeup" => "schedule",
         "Skill" => "skill_manage",
         _ => name,
@@ -353,13 +353,15 @@ mod tests {
         for (local, oauth) in [
             ("bash", "Bash"),
             ("read", "Read"),
-            ("subagent", "Agent"),
+            ("task", "Agent"),
             ("schedule", "ScheduleWakeup"),
             ("skill_manage", "Skill"),
         ] {
             assert_eq!(anthropic_map_tool_name_for_oauth(local), oauth);
             assert_eq!(anthropic_map_tool_name_from_oauth(oauth), local);
         }
+        // Legacy alias still maps outbound to Agent.
+        assert_eq!(anthropic_map_tool_name_for_oauth("subagent"), "Agent");
         assert_eq!(anthropic_map_tool_name_for_oauth("custom"), "custom");
     }
 

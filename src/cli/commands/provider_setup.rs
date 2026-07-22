@@ -177,6 +177,7 @@ pub(crate) fn configure_provider_profile(
         allow_provider_pinning: options.provider_routing,
         models: vec![NamedProviderModelConfig {
             id: model.clone(),
+            name: None,
             context_window: options.context_window,
             input: Vec::new(),
         }],

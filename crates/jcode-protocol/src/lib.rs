@@ -589,6 +589,8 @@ impl Request {
             Request::SetModel { id, .. } => *id,
             Request::SetRoute { id, .. } => *id,
             Request::SetSubagentModel { id, .. } => *id,
+            Request::SetAgentProfile { id, .. } => *id,
+            Request::PermissionResponse { id, .. } => *id,
             Request::RunSubagent { id, .. } => *id,
             Request::SetReasoningEffort { id, .. } => *id,
             Request::SetServiceTier { id, .. } => *id,

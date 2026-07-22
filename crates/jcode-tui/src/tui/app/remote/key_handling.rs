@@ -288,6 +288,40 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
+    // In-session permission queue (security desk).
+    if !app.permission_queue.is_empty() {
+        if let Some((request_id, decision)) = input::handle_permission_prompt_key(app, code) {
+            match remote
+                .send_permission_response(&request_id, &decision, None)
+                .await
+            {
+                Ok(()) => {
+                    let remaining = app.permission_queue.len();
+                    let notice = if decision.starts_with("deny_all") {
+                        "Permission denied".to_string()
+                    } else if decision == "always" {
+                        if remaining > 0 {
+                            format!("Always allow · next permission ({remaining} waiting)")
+                        } else {
+                            "Always allow for this session".to_string()
+                        }
+                    } else if remaining > 0 {
+                        format!("Allowed once · next permission ({remaining} waiting)")
+                    } else {
+                        "Allowed once".to_string()
+                    };
+                    app.set_status_notice(notice);
+                }
+                Err(e) => {
+                    app.push_display_message(DisplayMessage::error(format!(
+                        "Failed to send permission decision: {e}"
+                    )));
+                }
+            }
+        }
+        return Ok(());
+    }
+
     if app.changelog_scroll.is_some() {
         return app.handle_changelog_key(code);
     }
@@ -2144,6 +2178,16 @@ async fn handle_remote_key_internal(
                 }
 
                 if let Some(command) = app_mod::commands::parse_plan_command(trimmed) {
+                    // Hard capability switch before the planning prompt.
+                    if let Err(error) = remote.set_agent_profile("plan".to_string()).await {
+                        app.push_display_message(DisplayMessage::error(format!(
+                            "Failed to switch to plan profile: {error}"
+                        )));
+                        return Ok(());
+                    }
+                    app.push_display_message(DisplayMessage::system(
+                        app_mod::commands::build_profile_notice("plan"),
+                    ));
                     let prompt = app_mod::commands::build_plan_prompt(command.goal.as_deref());
                     if app.is_processing {
                         remote.cancel_with_reason("slash_plan").await?;
@@ -2159,6 +2203,19 @@ async fn handle_remote_key_internal(
                         let _ = begin_remote_send(app, remote, prompt, vec![], true, None, true, 0)
                             .await;
                     }
+                    return Ok(());
+                }
+
+                if app_mod::commands::parse_build_command(trimmed).is_some() {
+                    if let Err(error) = remote.set_agent_profile("build".to_string()).await {
+                        app.push_display_message(DisplayMessage::error(format!(
+                            "Failed to switch to build profile: {error}"
+                        )));
+                        return Ok(());
+                    }
+                    app.push_display_message(DisplayMessage::system(
+                        app_mod::commands::build_profile_notice("build"),
+                    ));
                     return Ok(());
                 }
 

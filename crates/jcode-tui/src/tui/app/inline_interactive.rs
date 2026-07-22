@@ -1260,6 +1260,11 @@ impl App {
             config.provider.model_picker_providers.as_deref(),
             &current_model,
         );
+        // Hide "not logged in" placeholders; keep the active model always.
+        let routes: Vec<crate::provider::ModelRoute> = routes
+            .into_iter()
+            .filter(|route| route.available || route.model == current_model)
+            .collect();
 
         if routes.is_empty() {
             self.inline_interactive_state = None;

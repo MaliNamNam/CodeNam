@@ -239,6 +239,10 @@ pub enum Request {
         model: Option<String>,
     },
 
+    /// Switch the session agent profile (`build`, `plan`, …).
+    #[serde(rename = "set_agent_profile")]
+    SetAgentProfile { id: u64, profile: String },
+
     /// Launch a subagent immediately in the active session.
     #[serde(rename = "run_subagent")]
     RunSubagent {
@@ -350,6 +354,18 @@ pub enum Request {
         request_id: String,
         /// The user's input (line of text)
         input: String,
+    },
+
+    /// Reply to an in-session permission ask (Once / Always / Deny).
+    #[serde(rename = "permission_response")]
+    PermissionResponse {
+        id: u64,
+        /// Matches PermissionRequest.request_id
+        request_id: String,
+        /// "once" | "always" | "deny"
+        decision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
 
     // === Agent-to-agent communication ===
@@ -1435,5 +1451,17 @@ pub enum ServerEvent {
         is_password: bool,
         /// Tool call ID this is associated with
         tool_call_id: String,
+    },
+
+    /// Agent is blocked on an interactive permission decision (in-session dock).
+    #[serde(rename = "permission_request")]
+    PermissionRequest {
+        request_id: String,
+        tool: String,
+        permission: String,
+        pattern: String,
+        description: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        urgency: Option<String>,
     },
 }

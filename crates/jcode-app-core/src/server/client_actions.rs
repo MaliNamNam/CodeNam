@@ -250,6 +250,27 @@ pub(super) async fn handle_set_subagent_model(
     }
 }
 
+pub(super) async fn handle_set_agent_profile(
+    id: u64,
+    profile: String,
+    agent: &Arc<Mutex<Agent>>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    let mut agent_guard = agent.lock().await;
+    match agent_guard.set_agent_profile(&profile) {
+        Ok(()) => {
+            let _ = client_event_tx.send(ServerEvent::Done { id });
+        }
+        Err(error) => {
+            let _ = client_event_tx.send(ServerEvent::Error {
+                id,
+                message: crate::util::format_error_chain(&error),
+                retry_after_secs: None,
+            });
+        }
+    }
+}
+
 pub(super) fn handle_run_subagent(
     id: u64,
     prompt: String,
@@ -1077,6 +1098,99 @@ pub(super) async fn handle_stdin_response(
     if let Some(tx) = stdin_responses.lock().await.remove(&request_id) {
         let _ = tx.send(input);
     }
+    let _ = client_event_tx.send(ServerEvent::Done { id });
+}
+
+pub(super) async fn handle_permission_response(
+    id: u64,
+    request_id: String,
+    decision: String,
+    message: Option<String>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    let decision_raw = decision.trim().to_string();
+    let decision_lower = decision_raw.to_ascii_lowercase();
+
+    // Bulk forms: deny_all:id1,id2  /  once_all:id1,id2
+    if let Some(ids) = decision_lower
+        .strip_prefix("deny_all:")
+        .or_else(|| decision_raw.strip_prefix("deny_all:"))
+    {
+        for rid in ids.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let _ = crate::safety::record_permission_via_file_with_always(
+                rid, false, false, "tui_session", message.clone(),
+            );
+            let safety = crate::tool::ambient::shared_safety_system();
+            let _ = safety.record_decision_with_always(rid, false, false, "tui_session", None);
+        }
+        let _ = client_event_tx.send(ServerEvent::Done { id });
+        return;
+    }
+    if let Some(ids) = decision_lower
+        .strip_prefix("once_all:")
+        .or_else(|| decision_raw.strip_prefix("once_all:"))
+    {
+        for rid in ids.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let _ = crate::safety::record_permission_via_file_with_always(
+                rid, true, false, "tui_session", None,
+            );
+            let safety = crate::tool::ambient::shared_safety_system();
+            let _ = safety.record_decision_with_always(rid, true, false, "tui_session", None);
+        }
+        let _ = client_event_tx.send(ServerEvent::Done { id });
+        return;
+    }
+
+    let (approved, always) = match decision_lower.as_str() {
+        "once" | "allow" | "approve" | "y" | "yes" => (true, false),
+        "always" | "a" => (true, true),
+        "deny" | "reject" | "n" | "no" => (false, false),
+        other => {
+            let _ = client_event_tx.send(ServerEvent::Error {
+                id,
+                message: format!(
+                    "Unknown permission decision '{other}'. Use once, always, deny, once_all, or deny_all."
+                ),
+                retry_after_secs: None,
+            });
+            return;
+        }
+    };
+    let safety = crate::tool::ambient::shared_safety_system();
+    if let Err(error) =
+        safety.record_decision_with_always(&request_id, approved, always, "tui_session", message)
+    {
+        let _ = client_event_tx.send(ServerEvent::Error {
+            id,
+            message: crate::util::format_error_chain(&error),
+            retry_after_secs: None,
+        });
+        return;
+    }
+    // Also write via file so wait_for_decision disk path sees it immediately.
+    let _ = crate::safety::record_permission_via_file_with_always(
+        &request_id,
+        approved,
+        always,
+        "tui_session",
+        None,
+    );
+
+    // OpenCode: reject clears remaining pending for the session.
+    if !approved {
+        let pending = safety.pending_requests();
+        for req in pending {
+            if req.id != request_id {
+                let _ = safety.record_decision_with_always(
+                    &req.id, false, false, "tui_session", Some("auto-rejected with deny".into()),
+                );
+                let _ = crate::safety::record_permission_via_file_with_always(
+                    &req.id, false, false, "tui_session", None,
+                );
+            }
+        }
+    }
+
     let _ = client_event_tx.send(ServerEvent::Done { id });
 }
 

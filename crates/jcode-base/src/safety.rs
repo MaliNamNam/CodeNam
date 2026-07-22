@@ -81,6 +81,9 @@ pub struct Decision {
     pub decided_via: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// When true with approved, the caller should persist a session "always" allow rule.
+    #[serde(default)]
+    pub always: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +234,7 @@ impl SafetySystem {
                         "Expired automatically: {}. Original agent is no longer active.",
                         reason
                     )),
+                    always: false,
                 });
             }
             let _ = persist_history(&h);
@@ -247,6 +251,18 @@ impl SafetySystem {
         via: &str,
         message: Option<String>,
     ) -> Result<()> {
+        self.record_decision_with_always(request_id, approved, false, via, message)
+    }
+
+    /// Record a decision, optionally marking it as "always allow" for this session.
+    pub fn record_decision_with_always(
+        &self,
+        request_id: &str,
+        approved: bool,
+        always: bool,
+        via: &str,
+        message: Option<String>,
+    ) -> Result<()> {
         // Remove from queue
         if let Ok(mut q) = self.queue.lock() {
             q.retain(|r| r.id != request_id);
@@ -259,6 +275,7 @@ impl SafetySystem {
             decided_at: Utc::now(),
             decided_via: via.to_string(),
             message,
+            always: always && approved,
         };
 
         if let Ok(mut h) = self.history.lock() {
@@ -267,6 +284,70 @@ impl SafetySystem {
         }
 
         Ok(())
+    }
+
+    /// Lookup a decision for a request id (from in-memory history, then disk).
+    pub fn decision_for(&self, request_id: &str) -> Option<Decision> {
+        if let Ok(h) = self.history.lock() {
+            if let Some(d) = h.iter().rev().find(|d| d.request_id == request_id) {
+                return Some(d.clone());
+            }
+        }
+        // Cross-process: permissions TUI writes via file; reload history.
+        if let Ok(path) = history_path()
+            && let Ok(disk) = storage::read_json::<Vec<Decision>>(&path)
+        {
+            if let Some(d) = disk.into_iter().rev().find(|d| d.request_id == request_id) {
+                if let Ok(mut h) = self.history.lock() {
+                    if !h.iter().any(|x| x.request_id == request_id) {
+                        h.push(d.clone());
+                    }
+                }
+                return Some(d);
+            }
+        }
+        None
+    }
+
+    /// Still pending?
+    pub fn is_pending(&self, request_id: &str) -> bool {
+        self.queue
+            .lock()
+            .map(|q| q.iter().any(|r| r.id == request_id))
+            .unwrap_or(false)
+    }
+
+    /// Block until a decision is recorded or timeout elapses.
+    pub async fn wait_for_decision(
+        &self,
+        request_id: &str,
+        timeout: std::time::Duration,
+    ) -> PermissionResult {
+        let start = std::time::Instant::now();
+        let poll = std::time::Duration::from_millis(200);
+        loop {
+            if let Some(d) = self.decision_for(request_id) {
+                return if d.approved {
+                    PermissionResult::Approved { message: d.message }
+                } else {
+                    PermissionResult::Denied { reason: d.message }
+                };
+            }
+            if !self.is_pending(request_id) {
+                // Not pending and no decision yet — re-check disk once more.
+                if let Some(d) = self.decision_for(request_id) {
+                    return if d.approved {
+                        PermissionResult::Approved { message: d.message }
+                    } else {
+                        PermissionResult::Denied { reason: d.message }
+                    };
+                }
+            }
+            if start.elapsed() >= timeout {
+                return PermissionResult::Timeout;
+            }
+            tokio::time::sleep(poll).await;
+        }
     }
 
     /// Return all pending permission requests.
@@ -409,6 +490,49 @@ pub fn record_permission_via_file(
         decided_at: Utc::now(),
         decided_via: via.to_string(),
         message,
+        always: false,
+    });
+    persist_history(&history)?;
+
+    Ok(())
+}
+
+/// Like [`record_permission_via_file`], but marks approve-as-always for the session ruleset.
+pub fn record_permission_via_file_with_always(
+    request_id: &str,
+    approved: bool,
+    always: bool,
+    via: &str,
+    message: Option<String>,
+) -> Result<()> {
+    let qp = queue_path()?;
+    if let Some(parent) = qp.parent() {
+        storage::ensure_dir(parent)?;
+    }
+    let mut queue: Vec<PermissionRequest> = if qp.exists() {
+        storage::read_json(&qp).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    queue.retain(|r| r.id != request_id);
+    persist_queue(&queue)?;
+
+    let hp = history_path()?;
+    if let Some(parent) = hp.parent() {
+        storage::ensure_dir(parent)?;
+    }
+    let mut history: Vec<Decision> = if hp.exists() {
+        storage::read_json(&hp).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    history.push(Decision {
+        request_id: request_id.to_string(),
+        approved,
+        decided_at: Utc::now(),
+        decided_via: via.to_string(),
+        message,
+        always: always && approved,
     });
     persist_history(&history)?;
 
@@ -462,6 +586,7 @@ pub fn expire_stale_permissions_via_file(via: &str) -> Result<Vec<String>> {
                 "Expired automatically: {}. Original agent is no longer active.",
                 reason
             )),
+            always: false,
         });
     }
     persist_history(&history)?;

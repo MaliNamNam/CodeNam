@@ -331,6 +331,14 @@ impl Agent {
         self.stdin_request_tx = Some(tx);
     }
 
+    /// Set the channel used to surface permission asks to the attached TUI dock.
+    pub fn set_permission_request_tx(
+        &mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<super::PermissionUiRequest>,
+    ) {
+        self.permission_request_tx = Some(tx);
+    }
+
     pub(super) async fn tool_definitions(&mut self) -> Vec<ToolDefinition> {
         if self.session.is_canary {
             self.registry.register_selfdev_tools().await;
@@ -456,11 +464,11 @@ impl Agent {
     }
 
     pub async fn execute_tool(
-        &self,
+        &mut self,
         name: &str,
         input: serde_json::Value,
     ) -> Result<crate::tool::ToolOutput> {
-        self.validate_tool_allowed(name)?;
+        self.enforce_tool_permission(name, &input).await?;
 
         let call_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -525,18 +533,6 @@ impl Agent {
             Some(duration_ms),
         );
         self.session.save()?;
-        Ok(())
-    }
-
-    pub(super) fn validate_tool_allowed(&self, name: &str) -> Result<()> {
-        if let Some(allowed) = self.allowed_tools.as_ref()
-            && !allowed.contains(name)
-        {
-            return Err(anyhow::anyhow!("Tool '{}' is not allowed", name));
-        }
-        if self.disabled_tools.contains(name) {
-            return Err(anyhow::anyhow!("Tool '{}' is disabled", name));
-        }
         Ok(())
     }
 

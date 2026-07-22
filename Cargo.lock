@@ -3362,6 +3362,7 @@ dependencies = [
  "jcode-notify-email",
  "jcode-overnight-core",
  "jcode-pdf",
+ "jcode-permission",
  "jcode-plan",
  "jcode-provider-core",
  "jcode-selfdev-types",
@@ -3447,6 +3448,7 @@ dependencies = [
  "jcode-logging",
  "jcode-memory-types",
  "jcode-message-types",
+ "jcode-permission",
  "jcode-plan",
  "jcode-protocol",
  "jcode-provider-antigravity",
@@ -3661,6 +3663,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "pdf-extract",
+]
+
+[[package]]
+name = "jcode-permission"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

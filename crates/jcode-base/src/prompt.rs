@@ -424,15 +424,13 @@ pub fn build_system_prompt_full_with_capabilities(
         parts.push(memory.to_string());
     }
 
-    // Add available skills list
+    // Add available skills catalog (name + description only; full body via skill_manage load)
     if !available_skills.is_empty() {
-        let mut skills_section = "# Available Skills\n\nYou have access to the following skills that the user can invoke with `/skillname`:\n".to_string();
-        for skill in available_skills {
-            skills_section.push_str(&format!("\n- `/{} ` - {}", skill.name, skill.description));
-        }
-        skills_section.push_str(
-            "\n\nWhen a user asks about available skills or capabilities, mention these skills.",
-        );
+        let catalog: Vec<(String, String)> = available_skills
+            .iter()
+            .map(|skill| (skill.name.clone(), skill.description.clone()))
+            .collect();
+        let skills_section = crate::permission::render_skill_guidance(&catalog);
         info.skills_chars = skills_section.len();
         parts.push(skills_section);
     }
@@ -517,15 +515,13 @@ pub fn build_system_prompt_split_with_capabilities(
         static_parts.push(content);
     }
 
-    // Add available skills list (fairly static)
+    // Available skills catalog only (full body loaded on demand via skill_manage)
     if !available_skills.is_empty() {
-        let mut skills_section = "# Available Skills\n\nYou have access to the following skills that the user can invoke with `/skillname`:\n".to_string();
-        for skill in available_skills {
-            skills_section.push_str(&format!("\n- `/{} ` - {}", skill.name, skill.description));
-        }
-        skills_section.push_str(
-            "\n\nWhen a user asks about available skills or capabilities, mention these skills.",
-        );
+        let catalog: Vec<(String, String)> = available_skills
+            .iter()
+            .map(|skill| (skill.name.clone(), skill.description.clone()))
+            .collect();
+        let skills_section = crate::permission::render_skill_guidance(&catalog);
         info.skills_chars = skills_section.len();
         static_parts.push(skills_section);
     }

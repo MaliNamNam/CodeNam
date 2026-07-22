@@ -49,6 +49,72 @@ pub enum AppRuntimeMode {
     TestHarness,
 }
 
+/// In-session permission dock choice (OpenCode-style once / always / deny).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PermissionPromptChoice {
+    #[default]
+    Once,
+    Always,
+    Deny,
+}
+
+/// One pending interactive permission ask.
+#[derive(Debug, Clone)]
+pub struct PermissionPromptItem {
+    pub request_id: String,
+    pub tool: String,
+    pub permission: String,
+    pub pattern: String,
+    pub description: String,
+}
+
+/// OpenCode-style permission queue: many pending, **one dock at a time** (FIFO).
+#[derive(Debug, Clone, Default)]
+pub struct PermissionQueue {
+    pub items: Vec<PermissionPromptItem>,
+    pub selected: PermissionPromptChoice,
+}
+
+impl PermissionQueue {
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn push(&mut self, item: PermissionPromptItem) {
+        if self
+            .items
+            .iter()
+            .any(|existing| existing.request_id == item.request_id)
+        {
+            return;
+        }
+        self.items.push(item);
+    }
+
+    /// Front of queue (FIFO) — the only request shown in the dock.
+    pub fn current(&self) -> Option<&PermissionPromptItem> {
+        self.items.first()
+    }
+
+    /// Pop front after a decision; next pending (if any) becomes the dock.
+    pub fn take_current(&mut self) -> Option<PermissionPromptItem> {
+        if self.items.is_empty() {
+            None
+        } else {
+            Some(self.items.remove(0))
+        }
+    }
+
+    /// Drain all (OpenCode reject clears remaining pending for the session).
+    pub fn drain_all(&mut self) -> Vec<PermissionPromptItem> {
+        std::mem::take(&mut self.items)
+    }
+}
+
 mod auth;
 mod auth_account_picker_saved_accounts;
 mod catchup;
@@ -1388,6 +1454,11 @@ pub struct App {
     pending_soft_interrupts: Vec<String>,
     // Soft interrupts written to the socket but not yet acknowledged by the server.
     pending_soft_interrupt_requests: Vec<(u64, String)>,
+    /// In-session permission queue (security desk).
+    permission_queue: PermissionQueue,
+    /// Filled by key handler; remote loop sends PermissionResponse then clears.
+    /// (request_id, decision) — decision may be once|always|deny|deny_all|once_all
+    pending_permission_decision: Option<(String, String)>,
     // Whether the current remote turn should trigger autoreview after completion.
     autoreview_after_current_turn: bool,
     // Whether the current remote turn should trigger autojudge after completion.

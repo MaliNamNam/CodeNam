@@ -916,6 +916,7 @@ fn populate_context_limits_from_config_ref_seeds_global_cache() {
             base_url: "https://gateway.example.test/v1".to_string(),
             models: vec![NamedProviderModelConfig {
                 id: model_id.to_string(),
+                name: None,
                 context_window: Some(1_000_000),
                 input: Vec::new(),
             }],
@@ -950,11 +951,13 @@ fn populate_context_limits_from_config_seeds_qualified_runtime_model_shapes() {
             models: vec![
                 NamedProviderModelConfig {
                     id: "issue421-qwen-128k".to_string(),
+                    name: None,
                     context_window: Some(131_072),
                     input: Vec::new(),
                 },
                 NamedProviderModelConfig {
                     id: "/opt/models/issue421-ornith-35b-q4.gguf".to_string(),
+                    name: None,
                     context_window: Some(131_072),
                     input: Vec::new(),
                 },

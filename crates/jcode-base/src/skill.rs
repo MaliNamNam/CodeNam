@@ -903,12 +903,12 @@ impl Skill {
 
     pub fn as_memory_entry(&self) -> crate::memory::MemoryEntry {
         let now = Utc::now() - chrono::Duration::days(365);
+        // Catalog-only: full skill body loads via skill_manage (action=load).
         let mut entry = crate::memory::MemoryEntry::new(
             crate::memory::MemoryCategory::Custom("Skills".to_string()),
             format!(
-                "Use skill `/{} ` when relevant.\n\n{}",
-                self.name,
-                self.get_prompt()
+                "Skill `/{}` — {}. Load full instructions with skill_manage action=load when this skill matches the task.",
+                self.name, self.description
             ),
         )
         .with_id(format!("skill:{}", self.name))
@@ -1073,8 +1073,11 @@ mod tests {
             entry.category,
             crate::memory::MemoryCategory::Custom(ref name) if name == "Skills"
         ));
+        // Catalog-only: name + description, not full skill body.
         assert!(entry.content.contains("/firefox-browser"));
-        assert!(entry.content.contains("# Skill: firefox-browser"));
+        assert!(entry.content.contains("Control Firefox browser sessions"));
+        assert!(entry.content.contains("skill_manage"));
+        assert!(!entry.content.contains("# Skill: firefox-browser"));
         assert_eq!(entry.source.as_deref(), Some("skill_registry"));
     }
 
